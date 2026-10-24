@@ -78,6 +78,17 @@ class CaptionService : Service(), SessionHost {
     override fun logInfo(m: String) { Log.i(TAG, m) }
     override fun logWarn(m: String, e: Throwable?) { Log.w(TAG, m, e) }
     override val logRoot: File get() = getExternalFilesDir(null)!!
+    /**
+     * AAC on the phone: 48 kbps is about a quarter of the PCM size for the same speech. A device whose encoder
+     * refuses 16 kHz mono falls back to WAV — a bigger recording is better than a session that fails to record.
+     */
+    // fully qualified: android.media.AudioFormat is imported in this file for the capture configuration
+    override fun audioFormat(): io.github.korenkrita.simulsub.AudioFormat = try {
+        AacRecorderFormat()
+    } catch (t: Throwable) {
+        logWarn("aac encoder unavailable, recording wav", t)
+        WavPcm
+    }
     override val appVersion: String get() = BuildConfig.VERSION_NAME
     override fun deviceInfo(byokUrl: String?): Map<String, Any?> =
         mapOf("device" to "${android.os.Build.MANUFACTURER} ${android.os.Build.MODEL}")

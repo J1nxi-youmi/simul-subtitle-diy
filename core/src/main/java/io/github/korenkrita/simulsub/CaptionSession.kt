@@ -83,6 +83,13 @@ interface SessionHost {
     fun logWarn(m: String, e: Throwable? = null)
     /** where session logs are kept (SessionLog.dir) */
     val logRoot: File
+    /**
+     * How recorded audio is encoded. WAV by default (the desktop records that way); Android overrides it with
+     * ADTS AAC, which is about eight times smaller for the same speech. A platform that cannot create its encoder
+     * falls back to the default rather than failing the session — the recording is a debugging aid, not the
+     * caption pipeline itself.
+     */
+    fun audioFormat(): AudioFormat = WavPcm
     val appVersion: String
     /** what the session log's session_start says about this device (and its proxy for [byokUrl]) */
     fun deviceInfo(byokUrl: String?): Map<String, Any?>
@@ -223,9 +230,11 @@ class CaptionSession(private val host: SessionHost) {
             recorder = if (sl != null && prefs.recordAudio) {
                 val dir = sl.file.parentFile
                 AudioRecorder.trim(dir)
-                AudioRecorder(File(dir, "${sl.stem}.wav.part"), onFail = {
+                // the format decides the extension: .wav on the desktop, .aac on Android
+                val fmt = host.audioFormat()
+                AudioRecorder(File(dir, "${sl.stem}.${fmt.extension}.part"), onFail = {
                     host.logWarn("audio recorder: $it"); audioWarned = true; main.post { refresh() }
-                })
+                }, format = fmt)
             } else null
             sl?.write(mapOf("ev" to "session_start", "app" to host.appVersion,
                 "jev_requested" to jevEnds, "jev_ends" to jevEnds, "jev_check" to jevCheck, "final_only" to prefs.finalOnly,
@@ -562,7 +571,8 @@ class CaptionSession(private val host: SessionHost) {
                     setStatus("") // audio arrives: the capture is running
                     if (recorder != null) {
                         val t0 = capturedAt - (frame.size - 1) * 1000L / 16_000
-                        log?.write(mapOf("ev" to "audio_start", "file" to "${log.stem}.wav", "t0" to t0, "hal" to !src.estimated))
+                        // the name the file will have when it is complete: .wav or .aac, whichever was recorded
+                        log?.write(mapOf("ev" to "audio_start", "file" to recorder.targetFile.name, "t0" to t0, "hal" to !src.estimated))
                     }
                 }
                 val f = frame.copyOf()
