@@ -143,4 +143,25 @@ class SessionLogTest {
         assertEquals("disk full", reported.get())
         assertNull(SessionLog.list(tmp.root).firstOrNull()?.takeIf { SessionLog.complete(it) })
     }
+
+    @Test
+    fun theStemLeavesRoomForTheAudioFileWithTheSameName() {
+        // 同一秒的 .wav 已经在了（用户删过日志、音频还在，或别的会话留下）：stem 必须避开它，
+        // 否则录音结束时要么覆盖那份录音、要么转正失败留下 .part
+        val root = tmp.newFolder()
+        val dir = SessionLog.dir(root).apply { mkdirs() }
+        val fmt = java.text.SimpleDateFormat("yyyyMMdd-HHmmss", java.util.Locale.US)
+        val cal = java.util.Calendar.getInstance()
+        for (delta in -1..2) { // 现在前后各留几秒：无论挑中哪一秒，那一秒的 .wav 都已被占用
+            cal.timeInMillis = System.currentTimeMillis() + delta * 1000L
+            File(dir, "session-${fmt.format(cal.time)}.wav").writeText("keep me")
+        }
+        val log = SessionLog(dir)
+        assertTrue("a stem whose .wav exists must be skipped, got ${log.stem}", log.stem.endsWith("-1"))
+        assertFalse(File(dir, "${log.stem}.wav").exists())
+        assertTrue(log.close())
+        assertTrue(SessionLog.complete(log.file))
+        // 占用的那份 .wav 原样还在
+        assertEquals("keep me", File(dir, log.stem.removeSuffix("-1") + ".wav").readText())
+    }
 }

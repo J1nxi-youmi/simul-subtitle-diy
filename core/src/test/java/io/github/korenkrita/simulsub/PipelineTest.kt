@@ -1745,6 +1745,55 @@ class PipelineTest {
         assertFalse(mt.calls[2].contains("ja12"))
         assertTrue(mt.calls[3].contains("ja12") && mt.calls[3].contains("ja13") && !mt.calls[3].contains("ja11"))
     }
+
+    /** Recognition by sample count, so a test can pick the text a job is recognised as. */
+    private class TextAsr(val bySize: Map<Int, String>) : Asr {
+        override fun recognize(samples: FloatArray): String = bySize[samples.size] ?: "ja${samples.size}"
+    }
+
+    /** A mixed-script recognition is shown as heard: a translation of it is a sentence nobody said. */
+    @Test
+    fun aMixedScriptRecognitionIsShownAsIsAndNeverTranslated() {
+        val out = Collections.synchronizedList(ArrayList<Caption>())
+        val done = CountDownLatch(1)
+        val mt = FakeMt(10)
+        // logged: an English stretch transcribed into kana, which the translator turned into "我来开麦了"
+        val asr = TextAsr(mapOf(1 to "My en is ready is哔哔リ。"))
+        val p = Pipeline(asr, mt, { out.add(it); if (it.isFinal) done.countDown() })
+        p.start()
+        p.submit(job(1, 1, true, 1))
+        assertTrue(done.await(5, TimeUnit.SECONDS))
+        p.stop(); p.awaitStopped()
+        assertTrue("nothing may be asked of the translator", mt.calls.isEmpty())
+        val shown = out.last { it.isFinal }
+        assertEquals("My en is ready is哔哔リ。", shown.zh)
+    }
+
+    /** A garbled sentence must not become the 【前文】 of the next one: the translator would follow it. */
+    @Test
+    fun aGarbledSentenceIsNotRememberedAsContext() {
+        val out = Collections.synchronizedList(ArrayList<Caption>())
+        val done = CountDownLatch(2)
+        val mt = FakeMt(10)
+        val asr = TextAsr(
+            mapOf(
+                1 to "今日はゲームをしますよろしくお願いします",
+                2 to "よ。", // a fragment: no context to offer
+                3 to "みんなも遊びに来てくださいね",
+            ),
+        )
+        val p = Pipeline(asr, mt, { out.add(it); if (it.isFinal) done.countDown() })
+        p.start()
+        p.submit(job(1, 1, true, 1))
+        p.submit(job(2, 1, true, 2))
+        p.submit(job(3, 1, true, 3))
+        assertTrue(done.await(5, TimeUnit.SECONDS))
+        p.stop(); p.awaitStopped()
+        // the third sentence sees the first, never the fragment
+        val third = mt.calls.last()
+        assertTrue(third.contains("今日はゲームをします"))
+        assertFalse(third.contains("【前文】\nよ。"))
+    }
 }
 
 class CaptionBoardTest {

@@ -178,6 +178,10 @@ class Prefs(ctx: Context) : SessionPrefs {
     override var keepLogs: Boolean
         get() = sp.getBoolean("keepLogs", false)
         set(v) = sp.edit().putBoolean("keepLogs", v).apply()
+    /** Also record a WAV of the captured audio when keepLogs is on. Off by default. */
+    override var recordAudio: Boolean
+        get() = sp.getBoolean("recordAudio", false)
+        set(v) = sp.edit().putBoolean("recordAudio", v).apply()
     /** Give the translator the last finished sentences as context (on by default). */
     override var contextOn: Boolean
         get() = sp.getBoolean("contextOn", true)

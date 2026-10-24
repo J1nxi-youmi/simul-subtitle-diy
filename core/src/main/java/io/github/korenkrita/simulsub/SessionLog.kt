@@ -26,6 +26,8 @@ class SessionLog(
     private val done: File
     /** the file being written; after a successful [close] the complete file is at [file] */
     private val part: File
+    /** the shared stem used for files kept with this log, e.g. `session-20261023-214100` */
+    val stem: String
     init {
         dir.mkdirs()
         val ts = SimpleDateFormat("yyyyMMdd-HHmmss", Locale.US).format(Date())
@@ -34,8 +36,11 @@ class SessionLog(
             while (true) {
                 val name = "session-$ts" + (if (i == 0) "" else "-$i")
                 val d = File(dir, "$name.jsonl"); val p = File(dir, "$name.jsonl$PART")
+                // 录音与日志同名（AudioRecorder 最后把 .wav.part 改名为 .wav）：stem 也要避开已存在的
+                // wav 名，否则转正时要么覆盖别人的录音、要么失败留下 .part
+                val w = File(dir, "$name.wav"); val wp = File(dir, "$name.wav$PART")
                 // created and marked active under one lock: a listing (also under it) never sees it unmarked
-                if (!d.exists() && p.createNewFile()) { done = d; part = p; ACTIVE.add(p); break }
+                if (!d.exists() && !w.exists() && !wp.exists() && p.createNewFile()) { done = d; part = p; stem = name; ACTIVE.add(p); break }
                 i++
             }
         }

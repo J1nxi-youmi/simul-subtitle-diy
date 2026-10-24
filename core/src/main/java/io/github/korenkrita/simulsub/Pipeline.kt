@@ -599,6 +599,10 @@ class Pipeline(
     private fun rememberFinal(seg: Long, ja: String) {
         if (seg > rememberedSeg) rememberedSeg = seg
         if (ja.isBlank()) return
+        // A garbled sentence is not context, it is poison: the translator reads 【前文】 as what was already said
+        // and follows it (a fragment "哔哔リ。" in the context produced "我刚刚在哔哔里看到个弹幕"). Only sentences
+        // a translator can use are remembered.
+        if (!TranslationPost.usefulContext(ja)) return
         recentFinals.addLast(ja)
         while (recentFinals.size > MAX_PREVIOUS_SENTENCES) recentFinals.removeFirst() // a later setup may ask for more
     }
@@ -729,7 +733,10 @@ class Pipeline(
             val job = j.q.job
             val start = clock()
             val ctx = previousFor(job.segmentId, j.setup.previousSentences)
-            val translatable = hasTranslatableContent(j.ja)
+            // A recognition that mixed scripts cannot be translated: the model invents a sentence for it (see
+            // TranslationPost.suspectSource), so the original is shown instead and no request is made.
+            val mixedScript = job.isFinal && TranslationPost.suspectSource(j.ja)
+            val translatable = hasTranslatableContent(j.ja) && !mixedScript
             val r = if (translatable) translate(job, j.setup, 1, j.ja, emptyList(), ctx) else null
             if (job.isFinal) rememberFinal(job.segmentId, j.ja) // context for the following segments, also when this one fails
             if (!running) return
@@ -738,8 +745,17 @@ class Pipeline(
                 if (!job.isFinal) continue
                 zh = "[翻译失败] ${j.ja}"
             }
+            // A mixed-script recognition is shown as it was heard: the original is ugly but true, while a
+            // translation of it is a sentence nobody said.
+            if (mixedScript) zh = j.ja
+            // The model answers garbage-in with fluent invention (a fragment "るがきま。" became "你别急嘛。").
+            // What it returned is cleaned here — kana noise, a leftover English filler, traditional characters,
+            // a blank answer — but nothing is ever added: see TranslationPost. A segment with nothing to translate
+            // keeps its empty answer (there is nothing to show), so the cleaning only runs where a translation
+            // was actually asked for.
+            if (translatable) zh = TranslationPost.tidy(zh, j.ja)
             val end = clock()
-            if (job.isFinal && checkTranslations) {
+            if (job.isFinal && checkTranslations && !mixedScript) {
                 val real = r?.takeIf { it.usable } != null && zh.isNotEmpty()
                 // live mode shows the first translation while Jev checks it; "only finished sentences" hides it
                 if (real) onCaption(caption(j, false, job.revision, zh, start, end, end - start))

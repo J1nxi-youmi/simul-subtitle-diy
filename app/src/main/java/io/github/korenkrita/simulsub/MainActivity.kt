@@ -1134,12 +1134,18 @@ class MainActivity : Activity() {
     private fun renderLogs() {
         val box = findViewById<LinearLayout>(R.id.logList)
         box.removeAllViews()
-        val files = SessionLog.list(getExternalFilesDir(null)!!)
+        val root = getExternalFilesDir(null)!!
+        // a killed session leaves a headerless recording: finish it here, so the list never offers an unplayable file
+        AudioRecorder.recover(SessionLog.dir(root))
+        val files = SessionLog.list(root)
         val active = SessionLog.activeFiles()
         listedLogs = files.map { it.name } to active
         // off by default; the switch takes effect from the next start (a running session keeps what it began with)
-        switchRow(box, "记录每次使用", "打开后，每次开始字幕会在手机上留一份文字记录：识别结果、翻译的提示词和译文、在线 Decisions 模型辅助的请求和回答，不含声音和 key。只有你点「分享」才会离开手机，出问题时可以发给开发者帮助排查。从下次开始字幕起生效。",
+        switchRow(box, "记录每次使用", "打开后，每次开始字幕会在手机上留一份文字记录：识别结果、翻译的提示词和译文、在线 Decisions 模型辅助的请求和回答，不含 key；声音默认不记录，需要的话在下面单独打开。只有你点「分享」才会离开手机，出问题时可以发给开发者帮助排查。从下次开始字幕起生效。",
             prefs.keepLogs) { prefs.keepLogs = it; renderLogs() }
+        // a recording is only kept for a session that writes a log: this switch does nothing while 记录每次使用 is off
+        switchRow(box, "同时保留音频", "默认关闭；只在上面「记录每次使用」打开时才生效。把每次字幕采集到的声音和文字记录一起存成录音文件，只保存在本机、不会上传，每分钟约 1.9 MB；总量超过 200 MB 时自动删除最旧的完整录音。从下次开始字幕起生效。",
+            prefs.recordAudio) { prefs.recordAudio = it }
         if (files.isEmpty()) {
             box.addView(TextView(this).apply {
                 text = if (prefs.keepLogs) "还没有记录。" else "还没有记录。现在不记录，打开上面的开关后才会记录。"
@@ -1162,9 +1168,12 @@ class MainActivity : Activity() {
             val title = if (n.length >= 15) "${n.substring(0, 4)}-${n.substring(4, 6)}-${n.substring(6, 8)} ${n.substring(9, 11)}:${n.substring(11, 13)}:${n.substring(13, 15)}${n.substring(15)}" else f.name
             texts.addView(TextView(this).apply { text = title; textSize = 16f; setTextColor(getColor(R.color.text)) })
             val complete = SessionLog.complete(f)
+            // the recording belongs to the record: its size is shown next to the log's (null: no audio was kept)
+            val audio = SessionFiles.audioOf(f)
             texts.addView(TextView(this).apply {
                 // .part: still running, or the session failed / was killed before the log was finished
-                text = "%.1f KB".format(f.length() / 1024.0) + when {
+                text = "%.1f KB".format(f.length() / 1024.0) +
+                    (audio?.let { " · 音频 " + sizeText(it.length()) } ?: "") + when {
                     complete -> ""
                     f in active -> " · 正在记录，结束后可以分享"
                     else -> " · 没有正常结束"
@@ -1175,8 +1184,8 @@ class MainActivity : Activity() {
             row.addView(MaterialButton(this, null, com.google.android.material.R.attr.borderlessButtonStyle).apply {
                 text = "删除"; setTextColor(getColor(R.color.err)); isEnabled = f !in active
                 minWidth = 0; minimumWidth = 0; setPadding((10 * dp).toInt(), 0, (10 * dp).toInt(), 0)
-                setOnClickListener { confirmDelete("删除 $title 的记录？", "删除后不能恢复。") {
-                    if (!SessionLog.delete(f)) Toast.makeText(this@MainActivity, "删除失败：记录正在写入或文件被占用", Toast.LENGTH_SHORT).show()
+                setOnClickListener { confirmDelete("删除 $title 的记录？", "这条记录如果有音频，会一起删除。删除后不能恢复。") {
+                    if (!SessionFiles.deleteLog(f)) Toast.makeText(this@MainActivity, "删除失败：记录正在写入或文件被占用", Toast.LENGTH_SHORT).show()
                     renderLogs()
                 } }
             })
@@ -1205,13 +1214,14 @@ class MainActivity : Activity() {
             orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
             setPadding(0, (6 * dp).toInt(), 0, 0)
             addView(TextView(this@MainActivity).apply {
-                text = "共 ${files.size} 个，" + files.sumOf { it.length() }.let { if (it < 1048576) "%.1f KB".format(it / 1024.0) else "%.1f MB".format(it / 1048576.0) }
+                // the total counts a record's log and recording together (core counts the bytes, the text is ours)
+                text = "共 ${files.size} 个，" + sizeText(SessionFiles.totalBytes(root))
                 textSize = 12.5f; setTextColor(getColor(R.color.text2))
             }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
             addView(MaterialButton(this@MainActivity, null, com.google.android.material.R.attr.borderlessButtonStyle).apply {
                 text = "全部清空"; setTextColor(getColor(R.color.err)); isEnabled = deletable > 0
-                setOnClickListener { confirmDelete("删除全部 $deletable 个记录？", "正在记录的不会删除。删除后不能恢复。") {
-                    val left = SessionLog.deleteAll(getExternalFilesDir(null)!!)
+                setOnClickListener { confirmDelete("删除全部 $deletable 个记录？", "正在记录的不会删除；音频会跟着它的记录一起删除。删除后不能恢复。") {
+                    val left = SessionFiles.deleteAll(root)
                     if (left > 0) Toast.makeText(this@MainActivity, "还剩 $left 个（正在记录或无法删除）", Toast.LENGTH_SHORT).show()
                     renderLogs()
                 } }
@@ -1230,15 +1240,25 @@ class MainActivity : Activity() {
     private var listedLogs: Pair<List<String>, Set<java.io.File>>? = null
     private var translateRunning = false
 
+    /** "999.9 KB" / "49.3 MB": the log list's own size text (core counts bytes, formatting stays here). */
+    private fun sizeText(bytes: Long) = if (bytes < 1048576) "%.1f KB".format(bytes / 1024.0) else "%.1f MB".format(bytes / 1048576.0)
+
     private fun share(f: java.io.File) {
         // the list may be up to one tick old: never hand out a URI for a file that is being written or no longer exists
         if (SessionLog.isActive(f) || !f.isFile) {
             Toast.makeText(this, "这个记录刚刚结束或已变动，请重新选择", Toast.LENGTH_SHORT).show(); renderLogs(); return
         }
-        val uri = androidx.core.content.FileProvider.getUriForFile(this, "$packageName.logs", f)
-        val send = Intent(Intent.ACTION_SEND).apply {
+        fun uriOf(file: java.io.File) = androidx.core.content.FileProvider.getUriForFile(this, "$packageName.logs", file)
+        // the recording belongs to the record: with one kept, both files go together; without, the single share stays as it was
+        val audio = SessionFiles.audioOf(f)?.takeIf { it.isFile }
+        val send = if (audio == null) Intent(Intent.ACTION_SEND).apply {
             type = "application/octet-stream" // TG and file managers keep .jsonl as a file instead of pasting text
-            putExtra(Intent.EXTRA_STREAM, uri)
+            putExtra(Intent.EXTRA_STREAM, uriOf(f))
+            putExtra(Intent.EXTRA_SUBJECT, f.name)
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        } else Intent(Intent.ACTION_SEND_MULTIPLE).apply {
+            type = "application/octet-stream" // same as above: .jsonl and .wav both stay files
+            putParcelableArrayListExtra(Intent.EXTRA_STREAM, arrayListOf(uriOf(f), uriOf(audio)))
             putExtra(Intent.EXTRA_SUBJECT, f.name)
             addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
         }

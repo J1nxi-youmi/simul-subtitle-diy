@@ -11,6 +11,8 @@ interface SessionPrefs {
     val jevOn: Boolean
     val jevCheck: Boolean
     val keepLogs: Boolean
+    /** Also keep the captured audio as a WAV file alongside the session log. */
+    val recordAudio: Boolean
     val keepSentences: Int
     val keepChars: Int
     val finalOnly: Boolean
@@ -81,6 +83,13 @@ interface SessionHost {
     fun logWarn(m: String, e: Throwable? = null)
     /** where session logs are kept (SessionLog.dir) */
     val logRoot: File
+    /**
+     * How recorded audio is encoded. WAV by default (the desktop records that way); Android overrides it with
+     * ADTS AAC, which is about eight times smaller for the same speech. A platform that cannot create its encoder
+     * falls back to the default rather than failing the session — the recording is a debugging aid, not the
+     * caption pipeline itself.
+     */
+    fun audioFormat(): AudioFormat = WavPcm
     val appVersion: String
     /** what the session log's session_start says about this device (and its proxy for [byokUrl]) */
     fun deviceInfo(byokUrl: String?): Map<String, Any?>
@@ -170,6 +179,7 @@ class CaptionSession(private val host: SessionHost) {
     /** this session has a Jev judge: the segmenter asks it at sentence ends */
     @Volatile private var jevActive = false
     @Volatile private var logWarned = false
+    @Volatile private var audioWarned = false
 
     @Volatile private var status = "正在准备…"
     /** the session ended by itself (overload, error, capture lost): the window stays with its last message */
@@ -186,6 +196,7 @@ class CaptionSession(private val host: SessionHost) {
     private fun session(keepLogs: Boolean) {
         var models: SpeechModels? = null
         var log: SessionLog? = null
+        var recorder: AudioRecorder? = null
         var keepOverlay = false
         try {
             // Fixed for the whole session (the home screen disables them while running): the two Jev switches.
@@ -216,6 +227,15 @@ class CaptionSession(private val host: SessionHost) {
             val sl = if (!keepLogs) null
                 else SessionLog(SessionLog.dir(host.logRoot), onFail = { host.logWarn("session log: $it"); logWarned = true; main.post { refresh() } })
             log = sl
+            recorder = if (sl != null && prefs.recordAudio) {
+                val dir = sl.file.parentFile
+                AudioRecorder.trim(dir)
+                // the format decides the extension: .wav on the desktop, .aac on Android
+                val fmt = host.audioFormat()
+                AudioRecorder(File(dir, "${sl.stem}.${fmt.extension}.part"), onFail = {
+                    host.logWarn("audio recorder: $it"); audioWarned = true; main.post { refresh() }
+                }, format = fmt)
+            } else null
             sl?.write(mapOf("ev" to "session_start", "app" to host.appVersion,
                 "jev_requested" to jevEnds, "jev_ends" to jevEnds, "jev_check" to jevCheck, "final_only" to prefs.finalOnly,
                 "mt_engine" to "byok",
@@ -462,7 +482,7 @@ class CaptionSession(private val host: SessionHost) {
             onSetupChange = { runCatching { exec.execute(rebuild) } } // rejected once the session ends
             exec.execute(rebuild) // a change made since the first snapshot only bumped the version
             try {
-                val lost = capture(pl, m, sl)
+                val lost = capture(pl, m, sl, recorder)
                 if (failed && !stopping) keepOverlay = true
                 else if (lost != null && !stopping) {
                     // what was already heard is still translated and shown, with the reason the capture ended
@@ -491,12 +511,16 @@ class CaptionSession(private val host: SessionHost) {
                     !probeExec.awaitTermination(1, java.util.concurrent.TimeUnit.SECONDS)) host.logWarn("waiting for the setup worker")
                 pl.stop()
                 pl.awaitStopped() // ASR/MT workers are out of native code after this
+                // Audio recording is finalized after all workers are done, before the session_end log event.
+                recorder?.close()
             }
         } catch (e: Throwable) {
             host.logWarn("session failed", e)
             setStatus("出错：${e.message}。${host.endHint}后可以重新开始。")
             keepOverlay = true
         } finally {
+            // Finalize the WAV (or leave it as .part) before the session_end event; close() is idempotent.
+            recorder?.close()
             // the pipeline workers have exited (or never started), so this is the last event
             log?.let { it.write(mapOf("ev" to "session_end", "overloaded" to overloaded)); it.close() } // failure → onFail
             // Detach the pipeline under the same lock stop uses; the native free happens outside it.
@@ -515,7 +539,7 @@ class CaptionSession(private val host: SessionHost) {
      * overload, or the audio ending by itself. @return why it ended by itself, for the user (null: stopped, overloaded,
      * failed, or no reason to show)
      */
-    private fun capture(pl: Pipeline, models: SpeechModels, log: SessionLog?): String? {
+    private fun capture(pl: Pipeline, models: SpeechModels, log: SessionLog?, recorder: AudioRecorder?): String? {
         // opened outside the lock: starting the audio may take a while, and stop must never wait for it
         if (stopping) return null
         val src = host.openAudio(log)
@@ -542,8 +566,17 @@ class CaptionSession(private val host: SessionHost) {
             while (!stopping && !overloaded && !failed) {
                 val capturedAt = src.read(frame)
                 if (capturedAt < 0) break // stopped, or the audio ended by itself
-                if (first) { first = false; setStatus("") } // audio arrives: the capture is running
+                if (first) {
+                    first = false
+                    setStatus("") // audio arrives: the capture is running
+                    if (recorder != null) {
+                        val t0 = capturedAt - (frame.size - 1) * 1000L / 16_000
+                        // the name the file will have when it is complete: .wav or .aac, whichever was recorded
+                        log?.write(mapOf("ev" to "audio_start", "file" to recorder.targetFile.name, "t0" to t0, "hal" to !src.estimated))
+                    }
+                }
                 val f = frame.copyOf()
+                recorder?.write(f)
                 framesRead += f.size
                 val prob = models.vadProb(f)
                 val hal = !src.estimated
@@ -597,6 +630,7 @@ class CaptionSession(private val host: SessionHost) {
             if (status.isNotEmpty()) append(status)
             if (notice.isNotEmpty()) append("${if (isNotEmpty()) "  ·  " else ""}$notice")
             if (logWarned) append("${if (isNotEmpty()) "  ·  " else ""}⚠ 日志写入失败，本次日志不完整")
+            if (audioWarned) append("${if (isNotEmpty()) "  ·  " else ""}⚠ 音频写入失败，本次录音不完整")
             // a failing service stays shown, also with timings off; one that works says nothing here
             serviceWarning(mtState, jevNow(), jevEndsOn, jevCheckOn, host.clock(), System.currentTimeMillis())?.let {
                 append("${if (isNotEmpty()) "  ·  " else ""}$it")

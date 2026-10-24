@@ -56,7 +56,9 @@ class CaptionSessionTest {
     private inner class FakePrefs : SessionPrefs {
         override val jevOn = false
         override val jevCheck = false
-        override val keepLogs = false
+        // set per test, before start(): the session reads both once while starting
+        @Volatile override var keepLogs = false
+        @Volatile override var recordAudio = false
         override val keepSentences = CaptionBoard.DEFAULT_SENTENCES
         override val keepChars = CaptionBoard.DEFAULT_CHARS
         override val finalOnly = false
@@ -99,6 +101,10 @@ class CaptionSessionTest {
         private val cancelled = CountDownLatch(1)
         @Volatile var closed = false
         private val t0 = monoMs()
+        /** the monoMs the file's sample 0 corresponds to (read()'s clock, one read granularity accurate) */
+        val startAt: Long get() = t0
+        /** all samples [read] hands out before it ends by itself */
+        val totalSamples: Int get() = samples.size
         override val estimated = false
         override fun read(frame: FloatArray): Long {
             if (cancelled.count == 0L) return -1
@@ -258,5 +264,63 @@ class CaptionSessionTest {
         assertTrue(systems.drop(before).isNotEmpty() && systems.drop(before).all { "VTuber" in it })
         host.post { s.stop() }
         assertTrue(host.released.await(10, TimeUnit.SECONDS))
+    }
+
+    @Test
+    fun recordedAudioKeepsAWavAnchoredByAnAudioStartEvent() {
+        val audio = FakeAudio(1.5f, null)
+        val host = FakeHost(audio)
+        host.prefs.keepLogs = true
+        host.prefs.recordAudio = true
+        host.post { CaptionSession(host).start() }
+        assertTrue(host.finished.await(20, TimeUnit.SECONDS))
+        val dir = SessionLog.dir(logs)
+        val jsonl = dir.listFiles { f: File -> f.name.endsWith(".jsonl") }?.singleOrNull()
+            ?: error("the session log is missing: ${dir.listFiles()?.joinToString { it.name }}")
+        assertFalse("the closed log is no .part", jsonl.name.endsWith(".part"))
+        val events = jsonl.readLines().map { Json.parse(it) as Map<*, *> }
+        val start = events.firstOrNull { it["ev"] == "audio_start" } ?: error("no audio_start in $events")
+        // the WAV sits next to the JSONL with the same stem, finished (no .part left behind)
+        assertEquals(jsonl.name.removeSuffix(".jsonl") + ".wav", start["file"])
+        val wav = File(dir, start["file"] as String)
+        assertTrue("the wav must exist after a normal close", wav.isFile)
+        assertTrue(dir.listFiles { f: File -> f.name.endsWith(".part") }.isNullOrEmpty())
+        // hal says the timestamps are capture times (FakeAudio reports no read time)
+        assertEquals(true, start["hal"])
+        val t0 = (start["t0"] as Number).toLong()
+        // 对齐公式：文件第 n 个采样点 ≈ t0 + n/16 毫秒。整个文件写了音频源给出的每一个样本，
+        // 所以第一个与最后一个采样点都要落在公式给的位置上（±2 ms 的取整余量）。
+        val samples = (wav.length() - 44) / 2
+        assertEquals("every sample the capture read is in the file", audio.totalSamples.toLong(), samples)
+        val firstMs = t0.toDouble()
+        val lastMs = t0 + (samples - 1) / 16.0
+        val trueFirstMs = audio.startAt.toDouble()
+        val trueLastMs = audio.startAt + audio.totalSamples * 1000.0 / 16_000.0
+        assertTrue("first sample: $firstMs vs $trueFirstMs", kotlin.math.abs(firstMs - trueFirstMs) <= 2.0)
+        assertTrue("last sample: $lastMs vs $trueLastMs", kotlin.math.abs(lastMs - trueLastMs) <= 2.0)
+        // the session_end closes the log after the audio was finalized
+        assertEquals("session_end", (events.lastOrNull()?.get("ev")))
+    }
+
+    @Test
+    fun theSwitchesDecideWhetherAnythingIsRecorded() {
+        val dir = SessionLog.dir(logs)
+        // keepLogs off: no log, so no audio either, whatever recordAudio says
+        val hostOff = FakeHost(FakeAudio(1.5f, null))
+        hostOff.prefs.recordAudio = true
+        hostOff.post { CaptionSession(hostOff).start() }
+        assertTrue(hostOff.finished.await(20, TimeUnit.SECONDS))
+        assertFalse(dir.exists() && dir.listFiles().orEmpty().isNotEmpty())
+        // recordAudio off: a log is written, but with no audio_start and no wav
+        val host = FakeHost(FakeAudio(1.5f, null))
+        host.prefs.keepLogs = true
+        host.prefs.recordAudio = false
+        host.post { CaptionSession(host).start() }
+        assertTrue(host.finished.await(20, TimeUnit.SECONDS))
+        val jsonl = dir.listFiles { f: File -> f.name.endsWith(".jsonl") }?.singleOrNull()
+            ?: error("the session log is missing: ${dir.listFiles()?.joinToString { it.name }}")
+        val events = jsonl.readLines().map { Json.parse(it) as Map<*, *> }
+        assertTrue(events.none { it["ev"] == "audio_start" })
+        assertTrue(dir.listFiles { f: File -> f.name.endsWith(".wav") || f.name.endsWith(".wav.part") }.isNullOrEmpty())
     }
 }
