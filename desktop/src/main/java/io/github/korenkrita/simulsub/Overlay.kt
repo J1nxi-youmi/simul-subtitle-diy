@@ -279,8 +279,8 @@ fun OverlayWindow(o: OverlayState, prefs: Prefs, onStop: () -> Unit) {
     var screen by remember { mutableStateOf(primary()) }
     var screens by remember { mutableStateOf(displays()) }
     fun screenAt(px: Float, py: Float) = screens.firstOrNull { it.contains(px.roundToInt(), py.roundToInt()) } ?: screens.first()
-    fun widthOf(frac: Float) = screen.width * frac.coerceIn(Prefs.MIN_WIDTH, 1f)
-    var cardW by remember { mutableStateOf(widthOf(prefs.widthFrac)) }
+    fun widthOf(px: Int) = px.coerceIn(Prefs.MIN_WIDTH_PX, screen.width).toFloat()
+    var cardW by remember { mutableStateOf(widthOf(prefs.overlayWidth(screen.width))) }
     var fixedH by remember { mutableStateOf(screen.height * prefs.heightFrac) }
     /** true when a card of [w] x [h] at [nx], [ny] has a display under some part of it */
     fun onSome(nx: Float, ny: Float, w: Float, h: Float) =
@@ -341,7 +341,7 @@ fun OverlayWindow(o: OverlayState, prefs: Prefs, onStop: () -> Unit) {
     LaunchedEffect(toolbar, poke, dragging) { if (toolbar && !dragging) { delay(4_000); toolbar = false } }
     LaunchedEffect(unlock) { if (unlock) { delay(3_000); unlock = false } }
     // the settings screen moves the sliders: follow them (a drag here writes the same values back)
-    LaunchedEffect(prefs.widthFrac) { cardW = widthOf(prefs.widthFrac) }
+    LaunchedEffect(prefs.widthPx, prefs.widthFrac) { cardW = widthOf(prefs.overlayWidth(screen.width)) }
     // displays come and go (plugged in, rearranged, resolution changed): follow them, and a card left on a display
     // that is gone moves back onto one before its window is moved or resized again
     LaunchedEffect(Unit) {
@@ -380,8 +380,12 @@ fun OverlayWindow(o: OverlayState, prefs: Prefs, onStop: () -> Unit) {
         // room for the toolbar to be measured once before it is placed
         state.size = DpSize(winW.dp, (maxOf(cardH, 40) + if (toolbar) gap + maxOf(barH, 140) else 0).dp)
     }
-    fun save() = prefs.setOverlay(x.roundToInt(), y.roundToInt(), if (cardH > 0) (y + cardH).roundToInt() else null,
-        (cardW / screen.width).coerceIn(Prefs.MIN_WIDTH, 1f), if (fixedH > 0) (fixedH / screen.height).coerceIn(0.05f, 0.4f) else 0f)
+    fun save() {
+        // the width is stored in pixels now; the old fraction is kept in step so a downgrade still looks right
+        prefs.widthPx = cardW.roundToInt()
+        prefs.setOverlay(x.roundToInt(), y.roundToInt(), if (cardH > 0) (y + cardH).roundToInt() else null,
+            (cardW / screen.width).coerceIn(Prefs.MIN_WIDTH, 1f), if (fixedH > 0) (fixedH / screen.height).coerceIn(0.05f, 0.4f) else 0f)
+    }
     LaunchedEffect(prefs.heightFrac) {
         if (fixedH == screen.height * prefs.heightFrac) return@LaunchedEffect
         fixedH = screen.height * prefs.heightFrac
@@ -390,7 +394,9 @@ fun OverlayWindow(o: OverlayState, prefs: Prefs, onStop: () -> Unit) {
         anchor(); save()
     }
     Window(onCloseRequest = onStop, state = state, title = "同声传译（diy版）· 字幕", undecorated = true, transparent = true,
-        alwaysOnTop = true, resizable = false, focusable = false) {
+        visible = prefs.overlayShown, alwaysOnTop = prefs.overlayOnTop, resizable = false, focusable = false) {
+        // 鼠标穿透: a Win32 window style, re-applied when the switch or the window changes
+        LaunchedEffect(prefs.overlayClickThrough) { WinOverlay.setClickThrough(window, prefs.overlayClickThrough) }
         // this window's own display scale: sizes are measured in its pixels (another display may scale differently)
         val density = androidx.compose.ui.platform.LocalDensity.current.density
         val toolbarView = @Composable {
@@ -428,7 +434,7 @@ fun OverlayWindow(o: OverlayState, prefs: Prefs, onStop: () -> Unit) {
                                     }, onDrag = { dx, dy ->
                                         // the opposite corner stays put; the card never grows past the edge of its screen
                                         val right = x + cardW; val bottom = y + fixedH
-                                        val w = (cardW + if (left) -dx else dx).coerceIn(screen.width * Prefs.MIN_WIDTH, here.width.toFloat())
+                                        val w = (cardW + if (left) -dx else dx).coerceIn(Prefs.MIN_WIDTH_PX.toFloat(), here.width.toFloat())
                                         val h = (fixedH + if (top) -dy else dy).coerceIn(30f, here.height * 0.4f)
                                         if (left) x = right - w
                                         if (top) y = (bottom - h).coerceAtLeast(here.y.toFloat())

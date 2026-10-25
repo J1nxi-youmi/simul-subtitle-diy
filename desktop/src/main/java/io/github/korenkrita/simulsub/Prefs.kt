@@ -52,8 +52,25 @@ class Prefs internal constructor(private val file: File) : SessionPrefs {
     /** page colours: "system", "light" or "dark" */
     var theme: String get() = str("theme") ?: "system"; set(v) = put("theme" to v)
     var palette: String get() = str("palette") ?: PALETTES[0].id; set(v) = put("palette" to v)
-    /** caption card width as a part of the screen width */
+    /** the old width setting: a part of the screen width; only read to migrate a pre-pixel value */
     var widthFrac: Float get() = float("widthFrac", DEFAULT_WIDTH); set(v) = put("widthFrac" to v)
+    /** caption card width in pixels; 0 = never set, so [overlayWidth] falls back to [widthFrac] once */
+    var widthPx: Int get() = int("widthPx", 0); set(v) = put("widthPx" to v)
+    /**
+     * The caption card width on a screen [screenWidth] wide. Pixels are what the user picks now; a settings file
+     * written before that (only [widthFrac]) keeps its look by converting once, and the next drag stores pixels.
+     */
+    fun overlayWidth(screenWidth: Int): Int {
+        val px = widthPx
+        if (px > 0) return px.coerceIn(MIN_WIDTH_PX, screenWidth)
+        return Math.round(screenWidth * widthFrac).coerceIn(MIN_WIDTH_PX, screenWidth)
+    }
+    /** whether the caption overlay is on screen at all (「悬浮字幕」) */
+    var overlayShown: Boolean get() = bool("overlayShown", true); set(v) = put("overlayShown" to v)
+    /** whether the overlay stays above other windows (「置顶」) */
+    var overlayOnTop: Boolean get() = bool("overlayOnTop", true); set(v) = put("overlayOnTop" to v)
+    /** whether clicks fall through the overlay to the video under it (「鼠标穿透」) */
+    var overlayClickThrough: Boolean get() = bool("overlayClickThrough", false); set(v) = put("overlayClickThrough" to v)
     /** caption area height as a part of the screen height; 0 = follows the content */
     var heightFrac: Float get() = float("heightFrac", 0f); set(v) = put("heightFrac" to v)
     override var showJa: Boolean get() = bool("showJa", true); set(v) = put("showJa" to v)
@@ -198,13 +215,15 @@ class Prefs internal constructor(private val file: File) : SessionPrefs {
     fun unlisten(l: (String) -> Unit) = listeners.remove(l)
 
     /** Back to the defaults of the caption look (「恢复默认」 on 字幕). */
-    fun resetStyle() = put("textSp" to null, "bgAlpha" to null, "palette" to null, "widthFrac" to null, "heightFrac" to null,
+    fun resetStyle() = put("textSp" to null, "bgAlpha" to null, "palette" to null, "widthFrac" to null, "widthPx" to null, "heightFrac" to null,
         "showJa" to null, "showStats" to null, "keepSentences" to null, "keepChars" to null)
 
     companion object {
         const val DEFAULT_WIDTH = 0.90f
         // 0.40 on the phone; a desk screen has room for a narrower card (about 300 points on a 1512-wide display)
         const val MIN_WIDTH = 0.20f
+        /** the narrowest card worth rendering: about a danmaku panel, 300 px on a 1080p screen */
+        const val MIN_WIDTH_PX = 240
         const val DEFAULT_ALPHA = 0.78f
         val prefs by lazy { Prefs(File(dataDir, "settings.json")) }
     }

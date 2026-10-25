@@ -13,6 +13,16 @@ val APP_VERSION_CODE: Int = System.getProperty("simulsub.versionCode")?.toIntOrN
 val modelsDir: File = File(System.getProperty("simulsub.models")
     ?: File(System.getProperty("compose.application.resources.dir") ?: ".", "models").path)
 
+/**
+ * Whether the speech models the engine opens are all there: `asr_sv/model.int8.onnx`, `asr_sv/tokens.txt` and
+ * `vad/silero_vad.onnx` (see Engines.kt). The packaged app ships them; a source run needs ./setup.sh first, and the
+ * home page should say so instead of letting 开始字幕 fail with a stack trace.
+ */
+fun modelsReady(): Boolean =
+    File(modelsDir, "asr_sv/model.int8.onnx").isFile &&
+        File(modelsDir, "asr_sv/tokens.txt").isFile &&
+        File(modelsDir, "vad/silero_vad.onnx").isFile
+
 /** The audio helper: next to the app's resources in the package, or tools/win-app's build when run from the repo. */
 val sysaudioFile: File = System.getProperty("compose.application.resources.dir")
     ?.let { File(it, "sysaudio.exe") }

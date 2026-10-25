@@ -38,12 +38,15 @@ compose.desktop {
         jvmArgs += listOf("-Dsimulsub.version=$appVersion", "-Dsimulsub.versionCode=$appCode")
         // packaged, the native libraries and sysaudio sit in compose.application.resources.dir (see Main.kt)
         if (dist == null) {
+            // Forward slashes on purpose: jpackage writes these into SimulSub.cfg, where a backslash starts an
+            // escape (, 	, ), so `C:\...\tools\win-app\build` arrived as `C:...oolswin-appbuild`.
+            fun p(path: java.io.File) = path.absolutePath.replace('\\', '/')
             jvmArgs += listOf(
-                "-Djava.library.path=${winDist.dir("native").asFile}",
-                "-Dsimulsub.root=${rootProject.projectDir}",
+                "-Djava.library.path=${p(winDist.dir("native").asFile)}",
+                "-Dsimulsub.root=${p(rootProject.projectDir)}",
                 // from the repo: the models ./setup.sh downloaded, a data folder of its own
-                "-Dsimulsub.models=${rootProject.projectDir}/models",
-                "-Dsimulsub.data=${layout.buildDirectory.dir("run-data").get().asFile}",
+                "-Dsimulsub.models=${p(rootProject.projectDir)}/models",
+                "-Dsimulsub.data=${p(layout.buildDirectory.dir("run-data").get().asFile)}",
             )
         }
         // No targetFormats: tools/win-app/build.sh runs :desktop:createDistributable and zips the app image itself,

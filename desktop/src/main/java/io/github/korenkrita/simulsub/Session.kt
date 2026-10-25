@@ -6,6 +6,8 @@ import java.io.File
 /** What the caption window shows; written on the UI thread, read by Compose. */
 class OverlayState {
     val lines = mutableStateOf<List<CaptionLine>>(emptyList())
+    /** every final caption of this session, oldest first: what the 本次会话 panel lists and 导出 writes */
+    val history = mutableStateOf<List<CaptionLine>>(emptyList())
     val diag = mutableStateOf<String?>(null)
     val mtLight = mutableStateOf(ServiceStatus.Light.GREY)
     val jevLight = mutableStateOf(ServiceStatus.Light.GREY)
@@ -100,6 +102,13 @@ class CaptionService private constructor(private val sysaudio: File) : SessionHo
 
     override fun show(lines: List<CaptionLine>, diag: String?, mtLight: ServiceStatus.Light, jevLight: ServiceStatus.Light,
                       mtReason: String?, jevReason: String?) {
+        // the overlay only keeps the last few sentences; the panel and the export want the whole session
+        val finals = lines.filter { it.isFinal && it.id >= 0 }
+        if (finals.isNotEmpty()) {
+            val known = overlay.history.value.mapTo(HashSet()) { it.id }
+            val fresh = finals.filter { it.id !in known }
+            if (fresh.isNotEmpty()) overlay.history.value = overlay.history.value + fresh
+        }
         overlay.lines.value = lines; overlay.diag.value = diag
         overlay.mtLight.value = mtLight; overlay.jevLight.value = jevLight
         overlay.mtReason.value = mtReason; overlay.jevReason.value = jevReason
@@ -129,11 +138,15 @@ class CaptionService private constructor(private val sysaudio: File) : SessionHo
         val endedState = mutableStateOf(false)
         val running: Boolean get() = current != null
 
+        /** The last session, kept after it stopped so its list can still be read and exported. */
+        @Volatile var lastSession: CaptionService? = null
+            private set
+
         /** UI thread. A session that ended by itself (its message still shown) is replaced. */
         fun start(sysaudio: File) {
             current?.let { if (it.ended) stop() else return }
             val s = CaptionService(sysaudio)
-            current = s; runningState.value = true; endedState.value = false
+            current = s; lastSession = s; runningState.value = true; endedState.value = false
             s.prefs.listen(s.prefListener)
             s.session.start()
         }
@@ -141,6 +154,7 @@ class CaptionService private constructor(private val sysaudio: File) : SessionHo
         /** UI thread. */
         fun stop() {
             val s = current ?: return
+            lastSession = s
             current = null; runningState.value = false; endedState.value = false
             s.prefs.unlisten(s.prefListener)
             s.session.stop()

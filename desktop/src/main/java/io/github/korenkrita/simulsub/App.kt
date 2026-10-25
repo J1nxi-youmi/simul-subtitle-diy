@@ -12,8 +12,10 @@ import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -81,11 +83,23 @@ fun app() = application {
     // Windows: the taskbar's own theme (it can be dark while apps are light), checked again every few seconds
     var trayDark by remember { mutableStateOf(taskbarDark()) }
     LaunchedEffect(Unit) { while (true) { delay(5_000); trayDark = taskbarDark() } }
+    // Ctrl+Alt+T toggles 鼠标穿透: the switch itself is in the main window, which may be closed
+    LaunchedEffect(Unit) {
+        OverlayHotkey.start {
+            java.awt.EventQueue.invokeLater { prefs.overlayClickThrough = !prefs.overlayClickThrough }
+        }
+    }
 
+    // The tray is the fallback: the main window can be closed, and with 穿透 on the overlay cannot be clicked at all,
+    // so every way back to it has to be reachable from here.
     Tray(icon = TrayIcon(running, trayDark), tooltip = "同传字幕", menu = {
+        Item("显示主窗口", onClick = { mainOpen = true })
         if (running) Item("停止字幕", onClick = { CaptionService.stop() })
         else Item("开始字幕", onClick = { startError = startCaptions(); if (startError != null) mainOpen = true })
-        Item("打开同传字幕", onClick = { mainOpen = true })
+        Item(if (prefs.overlayShown) "隐藏悬浮字幕" else "显示悬浮字幕") {
+            prefs.overlayShown = !prefs.overlayShown
+        }
+        if (prefs.overlayClickThrough) Item("恢复浮窗操作（解除穿透）") { prefs.overlayClickThrough = false }
         Separator()
         Item("退出", onClick = { CaptionService.stop(); exitApplication() })
     })
@@ -96,7 +110,7 @@ fun app() = application {
     }
 
     if (mainOpen) {
-        val state = rememberWindowState(size = DpSize(520.dp, 820.dp))
+        val state = rememberWindowState(size = DpSize(970.dp, 660.dp))
         // closing the window keeps the app (and its captions) in the menu bar
         Window(onCloseRequest = { mainOpen = false }, state = state, title = "同声传译（diy版）", icon = painterResource("icon.png")) {
             // the title bar is the system's: follow the page colour, not just the system's own setting
@@ -137,32 +151,89 @@ private class TrayIcon(val on: Boolean, val dark: Boolean) : Painter() {
     override fun hashCode() = on.hashCode() * 31 + dark.hashCode()
 }
 
+/** the pages the sidebar offers: the four settings groups are pages of their own, like the reference app */
+private val PAGE_TITLES = listOf("同传字幕", "字幕", "翻译", "页面", "记录", "关于")
+
 @Composable
 private fun MainScreen(startError: String?, setStartError: (String?) -> Unit) {
-    var settings by remember { mutableStateOf(false) }
-    var tab by remember { mutableIntStateOf(0) }
-    // 设置 › 翻译, where the LLM API is filled in (the home card's service row and its 去填写)
-    val openTranslate = { tab = 1; settings = true }
-    Column(Modifier.fillMaxSize()) {
-        if (!settings) {
-            Row(Modifier.fillMaxWidth().padding(start = 22.dp, end = 14.dp, top = 18.dp, bottom = 4.dp), verticalAlignment = Alignment.CenterVertically) {
-                Text("同传字幕", fontSize = 22.sp, fontWeight = FontWeight.Bold)
-                Grow()
-                TextBtn("设置") { settings = true }
+    // 0 首页, 1 字幕, 2 翻译, 3 页面, 4 记录, 5 关于 — the sidebar replaces the old settings tabs
+    var page by remember { mutableIntStateOf(0) }
+    val openTranslate = { page = 2 }
+    Row(Modifier.fillMaxSize()) {
+        Sidebar(page) { page = it }
+        Column(Modifier.weight(1f).fillMaxHeight()) {
+            Column(Modifier.fillMaxWidth().padding(start = 26.dp, end = 26.dp, top = 18.dp, bottom = 10.dp)) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text(PAGE_TITLES[page], fontSize = 22.sp, fontWeight = FontWeight.Bold)
+                        if (page == 0) {
+                            Text("把视频、直播里的声音，实时变成中文字幕", color = C.text2, fontSize = 13.sp,
+                                modifier = Modifier.padding(top = 4.dp))
+                        }
+                    }
+                    // the overlay's own switches: they belong next to the page that starts it, not in a settings tab
+                    if (page == 0) {
+                        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            OverlayToggle("悬浮字幕", prefs.overlayShown) { prefs.overlayShown = !prefs.overlayShown }
+                            OverlayToggle("置顶", prefs.overlayOnTop) { prefs.overlayOnTop = !prefs.overlayOnTop }
+                            OverlayToggle("鼠标穿透", prefs.overlayClickThrough) { prefs.overlayClickThrough = !prefs.overlayClickThrough }
+                        }
+                    }
+                }
             }
-            Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(horizontal = 18.dp)) { Home(startError, setStartError, openTranslate) }
-        } else {
-            Box(Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 14.dp)) {
-                TextBtn("‹ 返回") { settings = false }
-                Text("设置", fontSize = 18.sp, fontWeight = FontWeight.Bold, modifier = Modifier.align(Alignment.Center))
-            }
-            Box(Modifier.padding(horizontal = 18.dp)) {
-                Seg(listOf(0 to "字幕", 1 to "翻译", 2 to "页面", 3 to "记录"), tab) { tab = it }
-            }
-            Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(start = 18.dp, end = 18.dp, bottom = 24.dp)) {
-                when (tab) { 0 -> CaptionTab(); 1 -> TranslateTab(); 2 -> { PageTab(); AboutSection() }; else -> LogsTab() }
+            if (page == 0) {
+                Column(Modifier.fillMaxSize().padding(start = 26.dp, end = 26.dp)) {
+                    Column(Modifier.weight(1f).verticalScroll(rememberScrollState())) {
+                        Home(startError, setStartError, openTranslate)
+                    }
+                    HomeFooter(startError, setStartError, openTranslate)
+                }
+            } else {
+                Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(start = 26.dp, end = 26.dp, bottom = 22.dp)) {
+                    when (page) {
+                        1 -> CaptionTab()
+                        2 -> TranslateTab()
+                        3 -> PageTab()
+                        4 -> LogsTab()
+                        else -> AboutSection()
+                    }
+                }
             }
         }
+    }
+}
+
+/** a dot + label switch, like the reference app's 悬浮字幕 / 置顶 line */
+@Composable
+private fun OverlayToggle(label: String, on: Boolean, onClick: () -> Unit) {
+    Row(Modifier.clickable { onClick() }.padding(horizontal = 8.dp, vertical = 5.dp),
+        verticalAlignment = Alignment.CenterVertically) {
+        Dot(if (on) C.ok else C.faint)
+        Spacer(Modifier.width(6.dp))
+        Text(label, fontSize = 13.sp, color = if (on) C.text else C.muted)
+    }
+}
+
+@Composable
+private fun Sidebar(page: Int, onPick: (Int) -> Unit) {
+    Column(Modifier.width(200.dp).fillMaxHeight().background(C.pill)) {
+        Spacer(Modifier.height(10.dp))
+        for (i in 0..4) SidebarItem(PAGE_TITLES[i], page == i) { onPick(i) }
+        Spacer(Modifier.height(12.dp))
+        Box(Modifier.fillMaxWidth().padding(horizontal = 18.dp)) { Divider() }
+        Spacer(Modifier.height(12.dp))
+        SidebarItem(PAGE_TITLES[5], page == 5) { onPick(5) }
+    }
+}
+
+@Composable
+private fun SidebarItem(label: String, selected: Boolean, onClick: () -> Unit) {
+    Box(Modifier.fillMaxWidth().padding(horizontal = 10.dp, vertical = 2.dp)
+        .then(if (selected) Modifier.background(C.card, RoundedCornerShape(10.dp)) else Modifier)
+        .clickable { onClick() }.padding(horizontal = 14.dp, vertical = 9.dp)) {
+        Text(label, fontSize = 14.sp,
+            fontWeight = if (selected) FontWeight.SemiBold else FontWeight.Normal,
+            color = if (selected) C.text else C.text2)
     }
 }
 
@@ -172,28 +243,11 @@ private fun MainScreen(startError: String?, setStartError: (String?) -> Unit) {
 private fun Home(startError: String?, setStartError: (String?) -> Unit, openTranslate: () -> Unit) {
     val running by CaptionService.runningState
     val ended by CaptionService.endedState
-    Text("把视频、直播里的声音，实时变成字幕", color = C.text2, fontSize = 14.sp, modifier = Modifier.padding(start = 4.dp, bottom = 14.dp))
     /** the language name being typed for 其他; null while that editor is closed */
     var typing by remember { mutableStateOf<String?>(null) }
-    // one card: status, the two languages, the one action, and the LLM API it translates with
+    val ready = prefs.byokReady
+    // one card: the two languages and the LLM API the captions translate with
     Card {
-        @Composable fun status(color: Color, title: String, body: String) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Dot(color); Spacer(Modifier.width(10.dp)); Text(title, fontSize = 18.sp, fontWeight = FontWeight.Bold)
-            }
-            Text(body, color = C.text2, fontSize = 14.sp, lineHeight = 21.sp, modifier = Modifier.padding(start = 19.dp, top = 6.dp, bottom = 12.dp))
-        }
-        @Composable fun bigButton(fill: Color, onClick: () -> Unit, content: @Composable () -> Unit) =
-            Box(Modifier.fillMaxWidth().height(44.dp).background(fill, RoundedCornerShape(10.dp)).clickable { onClick() },
-                contentAlignment = Alignment.Center) { content() }
-        val ready = prefs.byokReady
-        when {
-            running && ended -> status(C.warn, "字幕已经停了", "原因写在字幕框里。点下面的按钮关掉它，然后可以重新开始。")
-            running -> status(C.ok, "字幕正在显示", "回到你要看的视频或直播就行。\n点一下字幕，可以调大小或停止；关掉这个窗口字幕也会继续，任务栏右下角的图标里可以停止。")
-            !ready -> status(C.warn, "先填翻译用的 LLM API", "填好服务地址、模型 ID 和 API Key，点「测试连接」，就能开始。声音识别已经装在 App 里，不用下载。")
-            startError != null -> status(C.err, "还不能开始", startError)
-            else -> status(C.brand, "可以开始了", "点下面的按钮开始。")
-        }
         // DIY: 左边是「识别语种」，和手机端一致——识别引擎只有 SenseVoice，能认的就是这五个。
         // 选「自动」时把翻译的源语言也交给模型自己判断。
         val asrLangs = listOf("ja" to "日语", "auto" to "自动（中日英韩粤）", "zh" to "中文", "ko" to "韩语", "yue" to "粤语")
@@ -228,21 +282,7 @@ private fun Home(startError: String?, setStartError: (String?) -> Unit, openTran
             }
         }
         Hint(if (running) "视频里说的语言 → 字幕的语言。字幕运行中，改了从下一句开始生效。" else "视频里说的语言 → 字幕的语言。知道是哪种语言就选上，翻译会更准。")
-        Spacer(Modifier.height(12.dp))
-        when {
-            running && ended -> Btn("关掉字幕", modifier = Modifier.fillMaxWidth()) { CaptionService.stop() }
-            running -> bigButton(C.errSoft, { CaptionService.stop() }) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Box(Modifier.size(12.dp).background(C.err, RoundedCornerShape(2.dp)))
-                    Spacer(Modifier.width(10.dp)); Text("停止字幕", fontSize = 16.sp, fontWeight = FontWeight.Bold)
-                }
-            }
-            !ready -> bigButton(C.brand, openTranslate) { Text("去填写", color = C.onBrand, fontSize = 16.sp, fontWeight = FontWeight.Bold) }
-            else -> bigButton(C.brand, { setStartError(startCaptions()) }) {
-                Text("▶  开始字幕", color = C.onBrand, fontSize = 16.sp, fontWeight = FontWeight.Bold)
-            }
-        }
-        Spacer(Modifier.height(12.dp)); Divider()
+        Spacer(Modifier.height(8.dp)); Divider()
         // the LLM API in use; opens 设置 › 翻译
         val host = ByokTranslator.chatUrl(prefs.byokUrl).second?.let { java.net.URI(it).host }
         Row(Modifier.fillMaxWidth().clickable { openTranslate() }.padding(top = 10.dp, bottom = 2.dp, start = 4.dp),
@@ -256,6 +296,108 @@ private fun Home(startError: String?, setStartError: (String?) -> Unit, openTran
         }
     }
     Hint("声音只在电脑上识别，不会上传；翻译时只把识别出的文字发给你填的 LLM API。")
+    Spacer(Modifier.height(12.dp))
+    SessionPanel()
+}
+
+/** 本次会话: everything said since the session started, with a filter and a way to keep it as text. */
+@Composable
+private fun SessionPanel() {
+    val running by CaptionService.runningState
+    val session = CaptionService.current ?: CaptionService.lastSession
+    val history = session?.overlay?.history?.value.orEmpty()
+    // shown even with nothing in it: a panel that appears only once captions arrive looks like a missing feature
+    var query by remember { mutableStateOf("") }
+    val shown = if (query.isBlank()) history else history.filter {
+        it.zh.contains(query, ignoreCase = true) || it.ja.orEmpty().contains(query, ignoreCase = true)
+    }
+    Card {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text("本次会话", fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
+            Spacer(Modifier.width(8.dp))
+            Text("${history.size} 条", color = C.muted, fontSize = 12.sp)
+            Grow()
+            Btn("导出…", enabled = history.isNotEmpty()) { exportCaptions(history) }
+            Spacer(Modifier.width(8.dp))
+            Btn("清空", enabled = history.isNotEmpty()) { session?.overlay?.history?.value = emptyList() }
+        }
+        Spacer(Modifier.height(8.dp))
+        Field(query, { query = it }, "搜索这次会话的字幕")
+        Spacer(Modifier.height(8.dp))
+        if (shown.isEmpty()) {
+            Text(if (history.isEmpty()) "开始字幕后，这里会一条条列出这次说过的句子。" else "没有匹配的句子。",
+                color = C.muted, fontSize = 13.sp, modifier = Modifier.padding(vertical = 18.dp))
+        } else {
+            val listScroll = rememberScrollState()
+            LaunchedEffect(shown.size) { listScroll.scrollTo(listScroll.maxValue) }
+            Column(Modifier.fillMaxWidth().heightIn(max = 300.dp).verticalScroll(listScroll)) {
+                // newest last, like a chat: the list is read top-down while new lines appear at the bottom
+                for (l in shown) {
+                    l.ja?.takeIf { it.isNotBlank() }?.let {
+                        Text(it, color = C.muted, fontSize = 12.sp, lineHeight = 17.sp)
+                    }
+                    Text(l.zh, color = C.text, fontSize = 14.sp, lineHeight = 20.sp, modifier = Modifier.padding(bottom = 8.dp))
+                }
+            }
+        }
+    }
+}
+
+/** Saves the session as plain text: the source line under each translation, one sentence per block. */
+private fun exportCaptions(lines: List<CaptionLine>) {
+    val dlg = java.awt.FileDialog(null as java.awt.Frame?, "导出字幕", java.awt.FileDialog.SAVE)
+    dlg.file = "字幕 " + java.text.SimpleDateFormat("yyyyMMdd-HHmm").format(java.util.Date()) + ".txt"
+    dlg.isVisible = true
+    val name = dlg.file ?: return
+    val dir = dlg.directory ?: return
+    val text = lines.joinToString("\n\n") { l -> l.ja?.takeIf { it.isNotBlank() }?.let { "$it\n${l.zh}" } ?: l.zh }
+    runCatching { java.io.File(dir, name).writeText(text, Charsets.UTF_8) }
+}
+
+/** The one action of 首页 plus what it will use: bottom-left, next to each other, as in the reference app. */
+@Composable
+private fun HomeFooter(startError: String?, setStartError: (String?) -> Unit, openTranslate: () -> Unit) {
+    val running by CaptionService.runningState
+    val ended by CaptionService.endedState
+    val ready = prefs.byokReady
+    // an error is one line here: the home page has no room for a status card above the action
+    startError?.let {
+        Text(it, color = C.err, fontSize = 12.sp, lineHeight = 17.sp, modifier = Modifier.padding(top = 10.dp))
+    }
+    Row(Modifier.fillMaxWidth().padding(top = 10.dp, bottom = 16.dp), verticalAlignment = Alignment.CenterVertically) {
+        when {
+            running && ended -> Btn("关掉字幕") { CaptionService.stop() }
+            running -> StartButton(C.err, "停止字幕", Color.White) { CaptionService.stop() }
+            // not configured: the button is the way to the page that fixes it
+            !ready -> StartButton(C.brand, "开始字幕", C.onBrand, openTranslate)
+            else -> StartButton(C.brand, "开始字幕", C.onBrand) { setStartError(startCaptions()) }
+        }
+        Spacer(Modifier.width(14.dp))
+        if (modelsReady()) StatusChip("引擎 已就绪", C.ok) else StatusChip("引擎 未安装", C.warn)
+        Spacer(Modifier.width(8.dp))
+        StatusChip(if (ready) "翻译 ${prefs.byokModel}" else "翻译 未配置", if (ready) C.ok else C.warn)
+        Spacer(Modifier.width(8.dp))
+        StatusChip(if (prefs.finalOnly) "说完再出" else "边听边出", C.muted)
+    }
+}
+
+@Composable
+private fun StartButton(fill: Color, label: String, textColor: Color, onClick: () -> Unit) {
+    Box(Modifier.height(40.dp).background(fill, RoundedCornerShape(10.dp)).clickable { onClick() }
+        .padding(horizontal = 20.dp), contentAlignment = Alignment.Center) {
+        Text(label, color = textColor, fontSize = 15.sp, fontWeight = FontWeight.Bold)
+    }
+}
+
+/** a pill under the start button: engine / translation model / sentence mode */
+@Composable
+private fun StatusChip(label: String, tint: Color) {
+    Row(Modifier.background(C.pill, RoundedCornerShape(14.dp)).padding(horizontal = 12.dp, vertical = 7.dp),
+        verticalAlignment = Alignment.CenterVertically) {
+        Dot(tint)
+        Spacer(Modifier.width(7.dp))
+        Text(label, color = C.text2, fontSize = 12.sp)
+    }
 }
 
 // ---- 字幕 --------------------------------------------------------------------------------------------------
@@ -263,13 +405,16 @@ private fun Home(startError: String?, setStartError: (String?) -> Unit, openTran
 @Composable
 private fun CaptionTab() {
     val sample = remember { OverlayState() }
+    // the display the overlay is measured against; the width is stored in pixels, so this is only a range
+    val screenW = remember { java.awt.Toolkit.getDefaultToolkit().screenSize.width }
+    val cardPx = prefs.overlayWidth(screenW)
     sample.lines.value = listOf(CaptionLine("这一句已经说完，是正式字幕", if (prefs.showJa) "（这里显示原文）" else null, true),
         CaptionLine("正在说的这一句…", if (prefs.showJa) "（原文）" else null, false))
     sample.diag.value = if (prefs.showStats) "这里显示识别和翻译用了多久" else null
     Group("外观") {
         Box(Modifier.fillMaxWidth().background(Color(0xFF3A3A40), RoundedCornerShape(10.dp)).padding(vertical = 16.dp, horizontal = 12.dp),
             contentAlignment = Alignment.Center) {
-            CaptionCard(sample, prefs, modifier = Modifier.fillMaxWidth(prefs.widthFrac.coerceIn(Prefs.MIN_WIDTH, 1f)))
+            CaptionCard(sample, prefs, modifier = Modifier.fillMaxWidth((cardPx.toFloat() / screenW).coerceIn(Prefs.MIN_WIDTH_PX.toFloat() / screenW, 1f)))
         }
         Label("字幕配色")
         // wraps onto more lines: a sideways scroll needs a trackpad (a mouse wheel scrolls the page)
@@ -298,8 +443,16 @@ private fun CaptionTab() {
         SwitchRow("显示识别和翻译用时", null, prefs.showStats) { prefs.showStats = it }
     }
     Group("字幕框大小和保留几句") {
-        Label("字幕宽度  ${Math.round(prefs.widthFrac * 100)}%")
-        Slider2((Math.round(prefs.widthFrac * 20) * 5f).coerceIn(40f, 100f), 40f..100f, 11) { prefs.widthFrac = Math.round(it / 5) * 5 / 100f }
+        Label("字幕宽度  ${cardPx} px")
+        // pixels, not a part of the screen: a danmaku-like strip means the same width on every monitor
+        Slider2(cardPx.toFloat(), Prefs.MIN_WIDTH_PX.toFloat()..screenW.toFloat(), ((screenW - Prefs.MIN_WIDTH_PX) / 10) - 1) {
+            prefs.widthPx = Math.round(it / 10f) * 10
+        }
+        Row(Modifier.fillMaxWidth().padding(bottom = 6.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            Btn("窄条 302") { prefs.widthPx = 302 }
+            Btn("中 640") { prefs.widthPx = 640 }
+            Btn("宽屏") { prefs.widthPx = Math.round(screenW * 0.9f) }
+        }
         Label(if (prefs.heightFrac <= 0f) "字幕高度  自动（跟着内容变）" else "字幕高度  屏幕的 ${Math.round(prefs.heightFrac * 100)}%")
         Slider2(if (prefs.heightFrac <= 0f) 0f else (Math.round(prefs.heightFrac * 20) * 5f).coerceIn(5f, 40f), 0f..40f, 7) { prefs.heightFrac = Math.round(it / 5) * 5 / 100f }
         Label("屏幕上至少留  ${prefs.keepSentences.coerceIn(1, 6)} 句")
@@ -765,6 +918,8 @@ private fun LogsTab() {
     Group("使用记录") {
         SwitchRow("记录每次使用", "打开后，每次开始字幕会在电脑上留一份文字记录：识别结果、翻译的提示词和译文、在线 Decisions 模型辅助的请求和回答，不含声音和 key。只有你自己发出去才会离开电脑，出问题时可以发给开发者帮助排查。从下次开始字幕起生效。",
             prefs.keepLogs) { prefs.keepLogs = it }
+        SwitchRow("同时保留音频", "默认关闭；只在上面「记录每次使用」打开时才生效。把每次字幕采集到的声音和文字记录一起存成一份 WAV，只保存在本机、不会上传，每分钟约 1.9 MB；总量超过 200 MB 时自动删除最旧的完整录音。从下次开始字幕起生效。",
+            prefs.recordAudio) { prefs.recordAudio = it }
         tick.let { }
         // a killed session leaves a headerless recording: finish it here, so the list never offers an unplayable file
         AudioRecorder.recover(SessionLog.dir(dataDir))
