@@ -870,6 +870,24 @@ class MainActivity : Activity() {
         setOnClickListener { onClick() }
     }
 
+    /**
+     * An outlined button, built here rather than by style: the theme's materialButtonOutlinedStyle is the borderless
+     * segmented look, and a style id cannot go in the constructor's defStyleAttr slot (that wants an attribute id) —
+     * doing that silently falls back to the filled theme button. [danger] paints the label red for 删除 / 全部清空.
+     */
+    private fun outlineButton(label: String, danger: Boolean = false) = MaterialButton(this).apply {
+        text = label
+        textSize = 14f
+        isAllCaps = false
+        backgroundTintList = ColorStateList.valueOf(getColor(R.color.card))
+        setTextColor(getColor(if (danger) R.color.err else R.color.text))
+        strokeWidth = (1 * dpx).toInt().coerceAtLeast(1)
+        strokeColor = ColorStateList.valueOf(getColor(R.color.line))
+        cornerRadius = (8 * dpx).toInt()
+        minimumHeight = (40 * dpx).toInt()
+        setPadding((12 * dpx).toInt(), 0, (12 * dpx).toInt(), 0)
+    }
+
     /** Group title + white list card on the settings page; returns the card's content box. */
     private fun group(root: LinearLayout, title: String): LinearLayout {
         root.addView(TextView(this, null, 0, R.style.SectionTitle).apply { text = title }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
@@ -1238,8 +1256,8 @@ class MainActivity : Activity() {
             }
         })
         // 保存 is the commit; the test is the secondary one, so it is the outlined button here
-        val test = MaterialButton(this, null, R.style.Widget_JpSub_ActionButton).apply {
-            text = if (testing) "测试中…" else "测试连接"; textSize = 15f; isEnabled = !running && !testing
+        val test = outlineButton(if (testing) "测试中…" else "测试连接").apply {
+            textSize = 15f; minimumHeight = (48 * dpx).toInt(); isEnabled = !running && !testing
         }
         row.addView(test)
         box.addView(row)
@@ -1421,18 +1439,16 @@ class MainActivity : Activity() {
                 textSize = 13.5f; setTextColor(getColor(R.color.text2))
             })
             row.addView(texts, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
-            // both are outlined buttons with a hairline: the theme turns materialButtonOutlinedStyle into the
-            // borderless segmented look, which is what made them read as plain text
-            row.addView(MaterialButton(this, null, R.style.Widget_JpSub_ActionButton).apply {
-                text = "分享"; isEnabled = f !in active
+            // both are outlined buttons built by [outlineButton]: the theme's outlined look is borderless, which is
+            // what made these read as plain text, and a style id in the constructor does not work
+            row.addView(outlineButton("分享").apply {
+                isEnabled = f !in active
                 minimumHeight = (48 * dp).toInt()
-                setPadding((12 * dp).toInt(), 0, (12 * dp).toInt(), 0)
                 setOnClickListener { share(f) }
             })
-            row.addView(MaterialButton(this, null, R.style.Widget_JpSub_ActionButton).apply {
-                text = "删除"; setTextColor(getColor(R.color.err)); isEnabled = f !in active
+            row.addView(outlineButton("删除", danger = true).apply {
+                isEnabled = f !in active
                 minimumHeight = (48 * dp).toInt()
-                setPadding((12 * dp).toInt(), 0, (12 * dp).toInt(), 0)
                 setOnClickListener { confirmDelete("删除 $title 的记录？", "这条记录如果有音频，会一起删除。删除后不能恢复。") {
                     if (!SessionFiles.deleteLog(f)) Toast.makeText(this@MainActivity, "删除失败：记录正在写入或文件被占用", Toast.LENGTH_SHORT).show()
                     renderLogs()
@@ -1471,10 +1487,9 @@ class MainActivity : Activity() {
                 text = "共 ${files.size} 个，" + sizeText(SessionFiles.totalBytes(root))
                 textSize = 12.5f; setTextColor(getColor(R.color.text2))
             }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
-            addView(MaterialButton(this@MainActivity, null, R.style.Widget_JpSub_ActionButton).apply {
-                text = "全部清空"; setTextColor(getColor(R.color.err)); isEnabled = deletable > 0
+            addView(outlineButton("全部清空", danger = true).apply {
+                isEnabled = deletable > 0
                 minimumHeight = (40 * dp).toInt()
-                setPadding((12 * dp).toInt(), 0, (12 * dp).toInt(), 0)
                 setOnClickListener { confirmDelete("删除全部 $deletable 个记录？", "正在记录的不会删除；音频会跟着它的记录一起删除。删除后不能恢复。") {
                     val left = SessionFiles.deleteAll(root)
                     if (left > 0) Toast.makeText(this@MainActivity, "还剩 $left 个（正在记录或无法删除）", Toast.LENGTH_SHORT).show()
