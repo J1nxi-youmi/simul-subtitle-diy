@@ -956,6 +956,7 @@ private fun LogsTab() {
 private fun AboutSection() {
     Group("关于") {
         Text("同声传译（diy版）  版本 $APP_VERSION", fontSize = 15.sp, modifier = Modifier.padding(vertical = 6.dp))
+        Hint("窗口左边是导航：开始字幕和本次会话在「同传字幕」；语言（识别语种 → 字幕语言）和 LLM API 在「翻译」；字幕外观在「字幕」；使用记录在「记录」。")
         Divider()
         Row(Modifier.fillMaxWidth().padding(vertical = 6.dp), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
             Btn(if (update.value is Update.Checking) "检查中…" else "检查更新", enabled = update.value !is Update.Checking,
