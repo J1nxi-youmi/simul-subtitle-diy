@@ -132,7 +132,7 @@ class MainActivity : Activity() {
         if (on) {
             loadStyle() // the preview needs the stage's real width, known once the page is laid out
             findViewById<View>(R.id.previewStage).post { loadStyle() }
-        } else { showSize(false); renderLang() }
+        } else showSize(false)
     }
 
     private fun showTab(i: Int) {
@@ -185,41 +185,54 @@ class MainActivity : Activity() {
         if (!back()) @Suppress("DEPRECATION") super.onBackPressed()
     }
 
-    /** The home card's two questions, side by side: 识别语种 → 字幕的语言。下次开始字幕时生效。 */
-    private fun renderLang() {
-        val box = findViewById<LinearLayout>(R.id.langBox)
-        box.removeAllViews()
-        val running = CaptionService.running
-        fun weighted(v: View) = v.apply { layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f) }
-        // DIY: 左边换成「识别语种」——识别引擎只有 SenseVoice，能认的语种就是这几个。
-        // 「自动」时把翻译的源语言也交给模型判断。
-        // 语种码来自模型本身：sherpa-onnx 明确只接受 auto / zh / en / ja / ko / yue
+    /**
+     * 语言（设置 › 翻译）: 识别语种 → 字幕的语言, side by side. The captions and the boxes share the widths, so the
+     * arrow sits between the two dropdowns; 自己填… opens [askTargetName].
+     */
+    private fun languageRow(): LinearLayout {
+        // DIY: 左边是「识别语种」——识别引擎只有 SenseVoice，能认的语种就是这几个。
+        // 「自动」时把翻译的源语言也交给模型判断。语种码来自模型本身：sherpa-onnx 只接受 auto / zh / en / ja / ko / yue
         val langs = listOf("ja" to "日语", "auto" to "自动（中日英韩粤）", "zh" to "中文", "ko" to "韩语", "yue" to "粤语")
-        val cur = langs.indexOfFirst { it.first == prefs.asrSvLang }.coerceAtLeast(0)
-        box.addView(weighted(dropdown(langs.map { it.second }, cur, true, wrap = true) {
+        val asr = dropdown(langs.map { it.second }, langs.indexOfFirst { it.first == prefs.asrSvLang }.coerceAtLeast(0), true, wrap = true) {
             val code = langs[it].first
             if (prefs.asrSvLang != code) {
                 prefs.asrSvLang = code
                 prefs.sourceLang = Lang.of(code) // 识别成什么语种，翻译的源语言就跟着它
-                renderTranslate()
+                main.post { renderTranslate() }
             }
-        }).apply { contentDescription = "识别语种" })
-        box.addView(TextView(this).apply {
-            text = "→"; textSize = 16f; setTextColor(getColor(R.color.muted)); importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
-            setPadding((10 * dpx).toInt(), 0, (10 * dpx).toInt(), 0)
-        })
-        // the presets, the typed language in use (if any), and 其他 to type one; the list is rebuilt after each change,
-        // so a cancelled 其他 shows the language in use again
+        }.apply { contentDescription = "识别语种" }
+        // the presets, the typed language in use (if any), and 其他 to type one
         val presets = Target.PRESETS
         val current = prefs.targetLang
         val targets = if (current in presets) presets else presets + current
-        val items = targets.map { it.zh } + "自己填…"
-        box.addView(weighted(dropdown(items, targets.indexOf(current), true, wrap = true) {
+        val target = dropdown(targets.map { it.zh } + "自己填…", targets.indexOf(current), true, wrap = true) {
             if (it == targets.size) askTargetName()
-            else if (prefs.targetLang != targets[it]) { prefs.targetLang = targets[it]; renderTranslate(); main.post { renderLang() } }
-        }).apply { contentDescription = "字幕翻译成" })
-        findViewById<TextView>(R.id.langHint).text = if (running) "识别语种 → 字幕的语言。字幕运行中，语种改了要重新开始字幕才生效。"
-            else "识别语种 → 字幕的语言。纯日语直播选「日语」最准；中日混说才用「自动」。"
+            else if (prefs.targetLang != targets[it]) { prefs.targetLang = targets[it]; main.post { renderTranslate() } }
+        }.apply { contentDescription = "字幕语言" }
+
+        fun caption(t: String) = TextView(this).apply {
+            text = t; textSize = 15f; setTextColor(getColor(R.color.text))
+            layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+            setPadding(0, 0, 0, (6 * dpx).toInt())
+        }
+        // the same arrow (transparent) in the caption line keeps both titles over their boxes
+        fun arrow(show: Boolean) = TextView(this).apply {
+            text = "→"; textSize = 16f
+            setTextColor(if (show) getColor(R.color.muted) else android.graphics.Color.TRANSPARENT)
+            setPadding((10 * dpx).toInt(), 0, (10 * dpx).toInt(), 0)
+            importantForAccessibility = View.IMPORTANT_FOR_ACCESSIBILITY_NO
+        }
+        fun rowOf(views: List<View>) = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
+            views.forEach { addView(it) }
+        }
+        asr.layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+        target.layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+        return LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            addView(rowOf(listOf(caption("识别语种"), arrow(false), caption("字幕语言"))))
+            addView(rowOf(listOf(asr, arrow(true), target)))
+        }
     }
 
     /** 其他（自己填）: a language name typed in, saved with 确定; cancel or a blank name keeps the language in use. */
@@ -241,7 +254,7 @@ class MainActivity : Activity() {
                 Target.custom(input.text.toString())?.let { if (it != prefs.targetLang) { prefs.targetLang = it; renderTranslate() } }
             }
             // whatever happened, the dropdown shows the language in use again (not 其他)
-            .setOnDismissListener { renderLang() }
+            .setOnDismissListener { renderTranslate() }
             .show()
     }
 
@@ -436,17 +449,6 @@ class MainActivity : Activity() {
         }
     }
 
-    /** The home card's last row: the LLM API translations go to (or that none is set up yet); opens 设置 › 翻译. */
-    private fun renderService() {
-        val host = ByokTranslator.chatUrl(prefs.byokUrl).second?.let { android.net.Uri.parse(it).host }
-        findViewById<TextView>(R.id.serviceText).text =
-            if (prefs.byokReady) {
-                val p = prefs.byokProfile.name.takeIf { prefs.byokProfiles.size > 1 }
-                "翻译：" + (if (p != null) "$p · " else "") + "${prefs.byokModel} · $host"
-            } else "翻译：还没填 LLM API"
-        findViewById<View>(R.id.serviceRow).setOnClickListener { openTranslate() }
-    }
-
     /** 设置 › 翻译, where the LLM API is filled in. */
     private fun openTranslate() {
         showSettings(true)
@@ -459,7 +461,6 @@ class MainActivity : Activity() {
     override fun onResume() {
         super.onResume()
         loadStyle() // the overlay toolbar may have changed size / opacity / mode meanwhile (no listener while paused)
-        renderLang()
         syncMode()
         prefs.listen(styleListener)
         renderPermissions()
@@ -489,7 +490,7 @@ class MainActivity : Activity() {
         override fun run() {
             render()
             // the translation switches are disabled while a session runs
-            if (CaptionService.running != translateRunning) { renderTranslate(); renderLang() }
+            if (CaptionService.running != translateRunning) renderTranslate()
             // a session started or finished (its .part renamed): the list must not keep buttons for files that moved
             val now = SessionLog.list(getExternalFilesDir(null)!!).map { it.name } to SessionLog.activeFiles()
             if (now != listedLogs) renderLogs()
@@ -516,7 +517,6 @@ class MainActivity : Activity() {
         } else {
             val missingPerm = !hasAudio() || !Settings.canDrawOverlays(this)
             val hint = if (missingPerm) "点下面的按钮，按提示允许下方两项，就能开始。" else "点下面的按钮，再在弹出的窗口里选你要看的 App。"
-            renderService()
             if (!prefs.byokReady) {
                 // nothing else to set up: without an LLM API there is nothing to start, so the one action goes there
                 status(R.color.warn, "先填翻译用的 LLM API", "服务地址和模型已经填好了，只需要粘贴你的 API Key，点「测试连接」就能开始。声音识别已经装在 App 里，不用下载。")
@@ -766,8 +766,14 @@ class MainActivity : Activity() {
         if (running) root.addView(note("字幕正在运行：内容类型、结合上文、去掉重复的字、LLM API（切换配置或点保存后）和 Jev 在线模型服务、key 改了从下一句开始生效；智能断句和检查译文从下次开始字幕时生效；显示方式马上生效。"), LinearLayout.LayoutParams(
             LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { topMargin = (12 * dpx).toInt() })
 
+        // -- the languages (moved here from the home card): 识别语种 → 字幕的语言
+        var box = group(root, "语言")
+        box.addView(languageRow())
+        box.addView(hint("「自动」容易把日语听成中文或英文，纯日语场次选「日语」，改了下次开始字幕时生效。"))
+        box.addView(hint("字幕语言：识别出的文字翻成它，运行中改了从下一句开始生效。"))
+
         // -- the LLM API the captions are translated with
-        var box = group(root, "LLM API")
+        box = group(root, "LLM API")
         renderByok(box, running)
 
         box = group(root, "内容")

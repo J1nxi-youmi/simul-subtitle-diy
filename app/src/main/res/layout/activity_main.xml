@@ -56,7 +56,7 @@
                 android:paddingHorizontal="4dp"
                 android:text="把视频、直播里的声音，实时变成中文字幕" />
 
-            <!-- status, languages, the one action and the service it translates with -->
+            <!-- status and the one action; the languages and the LLM API live in 设置 › 翻译 -->
             <com.google.android.material.card.MaterialCardView
                 style="@style/ListCard"
                 android:layout_marginTop="12dp">
@@ -94,21 +94,6 @@
                         android:layout_marginTop="4dp"
                         android:paddingStart="16dp" />
 
-                    <!-- what is spoken → what the captions are in -->
-                    <LinearLayout
-                        android:id="@+id/langBox"
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:layout_marginTop="12dp"
-                        android:gravity="center_vertical"
-                        android:orientation="horizontal" />
-
-                    <TextView
-                        android:id="@+id/langHint"
-                        style="@style/RowSub"
-                        android:layout_marginTop="6dp"
-                        android:paddingHorizontal="4dp" />
-
                     <com.google.android.material.progressindicator.LinearProgressIndicator
                         android:id="@+id/progress"
                         android:layout_width="match_parent"
@@ -142,38 +127,6 @@
                         android:layout_height="wrap_content"
                         android:minHeight="48dp"
                         android:visibility="gone" />
-
-                    <!-- the translation service in use; opens 设置 › 翻译 -->
-                    <View
-                        android:layout_width="match_parent"
-                        android:layout_height="1dp"
-                        android:layout_marginTop="12dp"
-                        android:background="@color/line" />
-
-                    <LinearLayout
-                        android:id="@+id/serviceRow"
-                        android:layout_width="match_parent"
-                        android:layout_height="wrap_content"
-                        android:background="?attr/selectableItemBackground"
-                        android:gravity="center_vertical"
-                        android:minHeight="48dp"
-                        android:orientation="horizontal"
-                        android:paddingTop="8dp">
-
-                        <TextView
-                            android:id="@+id/serviceText"
-                            style="@style/RowSub"
-                            android:layout_width="0dp"
-                            android:layout_weight="1"
-                            android:paddingStart="4dp" />
-
-                        <ImageView
-                            android:layout_width="20dp"
-                            android:layout_height="20dp"
-                            android:importantForAccessibility="no"
-                            android:src="@drawable/ic_chevron_right"
-                            app:tint="@color/muted" />
-                    </LinearLayout>
                 </LinearLayout>
             </com.google.android.material.card.MaterialCardView>
 
@@ -655,7 +608,7 @@
                             android:paddingHorizontal="14dp"
                             android:paddingTop="10dp"
                             android:paddingBottom="14dp"
-                            android:text="个人 diy 版：语音识别换成 SenseVoice（中/英/日/韩/粤，sherpa-onnx 本地运行，模型已装在 App 里），翻译接自己的 LLM API，译文检查用自己的模型。Silero VAD 用于断句。感谢这些开源项目。" />
+                            android:text="个人 diy 版：语音识别换成 SenseVoice（中/英/日/韩/粤，sherpa-onnx 本地运行，模型已装在 App 里），翻译接自己的 LLM API，译文检查用自己的模型。Silero VAD 用于断句。语言（识别语种 → 字幕语言）和 LLM API 都在「设置 › 翻译」里。感谢这些开源项目。" />
                     </LinearLayout>
                 </com.google.android.material.card.MaterialCardView>
             </LinearLayout>

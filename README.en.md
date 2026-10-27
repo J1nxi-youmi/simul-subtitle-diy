@@ -5,8 +5,8 @@
 <h1 align="center">Simul Subtitle（同传字幕）</h1>
 
 <p align="center">
-  Real-time floating translated subtitles for Japanese and English videos &amp; livestreams on Android and Windows.<br>
-  100% on-device speech recognition · Bring Your Own LLM (BYOK) · Works on top of any app.
+  Real-time floating translated subtitles for videos &amp; livestreams on Android and Windows.<br>
+  100% on-device speech recognition (Chinese, English, Japanese, Korean, Cantonese) · Bring Your Own LLM (BYOK) · Works on top of any app.
 </p>
 
 <p align="center">
@@ -38,7 +38,7 @@
 
 - **Works across your apps**: Watch Bilibili, YouTube, Twitch, browser streams, or local players. On Android, the app captures internal audio from any app that permits playback capture (DRM-protected streams excluded); on Windows, it captures system audio output directly without using a microphone.
 - **Live drafts &amp; final subtitles**: Draft captions appear while someone is speaking and settle into a polished translation as soon as the sentence ends—or switch to final-only mode to save battery and tokens.
-- **100% on-device speech recognition**: Ships with bundled ReazonSpeech and Silero VAD models (~78 MB). Nothing extra to download, and **your audio never leaves your device**.
+- **100% on-device speech recognition**: Ships with the bundled SenseVoice model (Chinese, English, Japanese, Korean, Cantonese) and Silero VAD. Nothing extra to download, and **your audio never leaves your device**.
 - **Bring Your Own LLM (BYOK)**: Connect any OpenAI-compatible API endpoint (DeepSeek, Qwen, OpenRouter, etc.) with your own base URL, model ID, and API key. On first use, the app automatically probes and disables reasoning/thinking mode for low-latency streaming.
 - **Translate into any language**: Built-in presets for Chinese, English, Japanese, and Korean, or choose **Custom…** (自己填…) to type any target language or dialect (e.g., Traditional Chinese, Cantonese, French, Spanish).
 - **Scene context &amp; glossaries**: Includes a built-in *Bilibili VTuber Livestream* preset and lets you create custom scenes with background notes and a term glossary—or have your LLM generate domain terms automatically from your description.
@@ -47,11 +47,12 @@
 
 > Note: The app's UI is currently in Chinese. Button labels below include both English meanings and their exact Chinese text.
 
-1. **Configure your LLM API**: On first launch, tap **Configure** (去填写) on the home screen—or go to **Settings → Translation** (设置 → 翻译). Enter your OpenAI-compatible base URL, model ID, and API key, then tap **Test Connection** (测试连接).
+1. **Configure your LLM API**: On first launch, tap **Configure** (去填写) on the home screen—or open **Translation** (翻译) in the sidebar on Windows / under settings on Android. Enter your OpenAI-compatible base URL, model ID, and API key, then tap **Test Connection** (测试连接).
 2. **Grant permissions**:
    - **Android**: Allow internal audio capture and displaying over other apps when prompted.
    - **Windows**: No special permissions required.
-3. **Start subtitles**: Select the spoken language (Japanese / English) on the home screen and tap **Start Captions** (开始字幕). On Android, pick the target app in the system dialog; on desktop, it listens to all system playback immediately. Switch back to your video to watch with live subtitles.
+3. **Pick the languages**: At the top of the same **Translation** page, choose the spoken language → subtitle language (识别语种 → 字幕语言; default Japanese → Chinese).
+4. **Start subtitles**: Tap **Start Captions** (开始字幕) on the home screen. On Android, pick the target app in the system dialog; on desktop, it listens to all system playback immediately. Switch back to your video to watch with live subtitles.
 
 ### Subtitle Overlay Controls
 
@@ -74,7 +75,7 @@ Download the latest package for your platform from the [Releases](../../releases
 
 - **Requirements**: Android 10 (API 29) or later, `arm64-v8a`.
 - **Install**: Download the `.apk` from [Releases](../../releases) and open it on your phone (allow *Install unknown apps* when prompted).
-- **In-app updates**: Since v0.4, the app checks for updates on launch and can download and install new releases directly. You can also check manually or disable auto-checks under **Settings → About** (设置 → 关于).
+- **In-app updates**: Since v0.4, the app checks for updates on launch and can download and install new releases directly. You can also check manually or disable auto-checks under **Settings → Page** (设置 → 页面).
 
 ### Windows
 
@@ -93,7 +94,7 @@ Download the latest package for your platform from the [Releases](../../releases
 Some apps (such as DRM-protected video players) block other apps from capturing their audio at the OS level. Desktop builds capture system output directly and do not have this limitation.
 
 **Q: Which spoken languages are supported?**
-**Japanese** and **English**. Selecting the matching source language on the home screen helps tailor the translation prompt.
+**Chinese, English, Japanese, Korean and Cantonese**, all with one SenseVoice model. You can lock a language or let the model detect it; locking is more accurate for short livestream sentences.
 
 **Q: Is my audio ever uploaded to the cloud?**
 **No.** Speech-to-text runs locally on your phone or computer. Only the recognized text transcript is sent to the LLM API endpoint you configured. See [docs/privacy.md](docs/privacy.md) for details.
@@ -105,10 +106,8 @@ Pick a fast model whose reasoning/thinking mode can be disabled—otherwise thin
 
 Simul Subtitle builds on these open-source projects:
 
-- **[ReazonSpeech](https://github.com/reazon-research/ReazonSpeech)**: Japanese and English speech recognition ([reazonspeech-k2-v2-ja-en](https://huggingface.co/csukuangfj/reazonspeech-k2-v2-ja-en) exported for sherpa-onnx).
+- **[SenseVoice](https://github.com/FunAudioLLM/SenseVoice)**: Multilingual speech recognition (Chinese, English, Japanese, Korean, Cantonese).
 - **[sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx)**: On-device speech recognition and voice activity detection runtime ([Silero VAD](https://github.com/snakers4/silero-vad)).
-
-The optional **Smart Sentence Segmentation** and **Translation Verification** features use **[TypeSafe Jev](https://typesafe.ai)**—a closed-source commercial cloud service for structured decisions (disabled by default; billed at ~$0.04 per hour of speech when using a paid endpoint; see [docs/jev.md](docs/jev.md)).
 
 ---
 
