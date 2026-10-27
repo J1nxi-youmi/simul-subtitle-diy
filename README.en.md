@@ -47,11 +47,23 @@
 
 > Note: The app's UI is currently in Chinese. Button labels below include both English meanings and their exact Chinese text.
 
-1. **Configure your LLM API**: On first launch, tap **Configure** (去填写) on the home screen—or go to **Settings → Translation** (设置 → 翻译). Enter your OpenAI-compatible base URL, model ID, and API key, then tap **Test Connection** (测试连接).
+1. **Configure your LLM API**: On first launch, tap **Start Captions** (开始字幕) on the home screen—it takes you straight to the page that is still missing, the **Translation** tab (翻译). Enter your OpenAI-compatible base URL, model ID, and API key, then tap **Test Connection** (测试连接).
 2. **Grant permissions**:
-   - **Android**: Allow internal audio capture and displaying over other apps when prompted.
+   - **Android**: Allow internal audio capture and displaying over other apps when prompted. After granting the overlay permission in system settings, the start continues by itself.
    - **Windows**: No special permissions required.
-3. **Start subtitles**: Select the spoken language (Japanese / English) on the home screen and tap **Start Captions** (开始字幕). On Android, pick the target app in the system dialog; on desktop, it listens to all system playback immediately. Switch back to your video to watch with live subtitles.
+3. **Start subtitles**: Pick the spoken language under **Translation → Language** (识别语种, Japanese by default), go back to **Home** and tap **Start Captions** (开始字幕). On Android, pick the target app in the system dialog; on desktop, it listens to all system playback immediately. Switch back to your video to watch with live subtitles.
+
+### Phone layout
+
+The Android app has five sections along the bottom—**Home** (首页), **Subtitles** (字幕), **Translation** (翻译), **Page** (页面), **Records** (记录)—with no settings dialog and no sub-pages:
+
+| Section | What lives there |
+|---|---|
+| Home | This session's transcript (search / export / clear), the start button, and three status chips (engine / translation model / caption mode) |
+| Subtitles | Look (preview, palette, size, opacity) and display (original text, timing, width, height, lines kept) |
+| Translation | Language, LLM API, content type, segmentation, caption mode, translation check |
+| Page | Theme, notifications, about (version and update check) |
+| Records | Session logs, audio recording, the list of saved logs |
 
 ### Subtitle Overlay Controls
 
@@ -74,7 +86,7 @@ Download the latest package for your platform from the [Releases](../../releases
 
 - **Requirements**: Android 10 (API 29) or later, `arm64-v8a`.
 - **Install**: Download the `.apk` from [Releases](../../releases) and open it on your phone (allow *Install unknown apps* when prompted).
-- **In-app updates**: Since v0.4, the app checks for updates on launch and can download and install new releases directly. You can also check manually or disable auto-checks under **Settings → About** (设置 → 关于).
+- **In-app updates**: Since v0.4, the app checks for updates on launch and can download and install new releases directly. You can also check manually or disable auto-checks under **Page → About** (页面 → 关于).
 
 ### Windows
 
