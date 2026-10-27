@@ -15,7 +15,6 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -38,6 +37,7 @@ import androidx.compose.ui.graphics.painter.Painter
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.DpSize
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -183,9 +183,7 @@ private fun MainScreen(startError: String?, setStartError: (String?) -> Unit) {
             }
             if (page == 0) {
                 Column(Modifier.fillMaxSize().padding(start = 26.dp, end = 26.dp)) {
-                    Column(Modifier.weight(1f).verticalScroll(rememberScrollState())) {
-                        Home(startError, setStartError, openTranslate)
-                    }
+                    Home(Modifier.weight(1f))
                     HomeFooter(startError, setStartError, openTranslate)
                 }
             } else {
@@ -240,69 +238,14 @@ private fun SidebarItem(label: String, selected: Boolean, onClick: () -> Unit) {
 // ---- home --------------------------------------------------------------------------------------------------
 
 @Composable
-private fun Home(startError: String?, setStartError: (String?) -> Unit, openTranslate: () -> Unit) {
-    val running by CaptionService.runningState
-    val ended by CaptionService.endedState
-    /** the language name being typed for 其他; null while that editor is closed */
-    var typing by remember { mutableStateOf<String?>(null) }
-    val ready = prefs.byokReady
-    // one card: the two languages and the LLM API the captions translate with
-    Card {
-        // DIY: 左边是「识别语种」，和手机端一致——识别引擎只有 SenseVoice，能认的就是这五个。
-        // 选「自动」时把翻译的源语言也交给模型自己判断。
-        val asrLangs = listOf("ja" to "日语", "auto" to "自动（中日英韩粤）", "zh" to "中文", "ko" to "韩语", "yue" to "粤语")
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Dropdown(asrLangs.map { it.second }, asrLangs.indexOfFirst { it.first == prefs.asrSvLang }.coerceAtLeast(0), modifier = Modifier.weight(1f)) {
-                val code = asrLangs[it].first
-                prefs.asrSvLangSetting = code
-                prefs.sourceLang = Lang.of(code) // 识别成什么语种，翻译的源语言就跟着它
-            }
-            Text("→", color = C.muted, fontSize = 16.sp, modifier = Modifier.padding(horizontal = 10.dp))
-            // the presets, the typed language in use (if any), and 其他 to type one below
-            val presets = Target.PRESETS
-            val current = prefs.targetLang
-            val targets = if (current in presets) presets else presets + current
-            Dropdown(targets.map { it.zh } + "自己填…", targets.indexOf(current), modifier = Modifier.weight(1f)) {
-                if (it == targets.size) typing = current.takeIf { c -> c.lang == null }?.name ?: ""
-                else { typing = null; prefs.targetLang = targets[it] }
-            }
-        }
-        // 其他: a language name typed in, saved with 确定; 取消 or a blank name keeps the language in use. Shown again by
-        // picking 其他 once more (a typed language in use is in the list, so 其他 is never the selected item).
-        typing?.let { t ->
-            Spacer(Modifier.height(10.dp))
-            Field(t, { v -> typing = v.take(Target.MAX_NAME) }, "例如 繁体中文、粤语、文言文")
-            Hint("写上想要的语言，会原样交给你填的 LLM 去翻译。")
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Grow()
-                TextBtn("取消") { typing = null }
-                Btn("确定", primary = true, enabled = Target.custom(t) != null) {
-                    Target.custom(t)?.let { prefs.targetLang = it }; typing = null
-                }
-            }
-        }
-        Hint(if (running) "视频里说的语言 → 字幕的语言。字幕运行中，改了从下一句开始生效。" else "视频里说的语言 → 字幕的语言。知道是哪种语言就选上，翻译会更准。")
-        Spacer(Modifier.height(8.dp)); Divider()
-        // the LLM API in use; opens 设置 › 翻译
-        val host = ByokTranslator.chatUrl(prefs.byokUrl).second?.let { java.net.URI(it).host }
-        Row(Modifier.fillMaxWidth().clickable { openTranslate() }.padding(top = 10.dp, bottom = 2.dp, start = 4.dp),
-            verticalAlignment = Alignment.CenterVertically) {
-            Text(if (ready) {
-                val p = prefs.byokProfile.name.takeIf { prefs.byokProfiles.size > 1 }
-                "翻译：" + (if (p != null) "$p · " else "") + "${prefs.byokModel} · $host"
-            } else "翻译：还没填 LLM API", color = C.text2, fontSize = 14.sp,
-                modifier = Modifier.weight(1f), maxLines = 1)
-            Text("›", color = C.muted, fontSize = 18.sp)
-        }
-    }
-    Hint("声音只在电脑上识别，不会上传；翻译时只把识别出的文字发给你填的 LLM API。")
-    Spacer(Modifier.height(12.dp))
-    SessionPanel()
+private fun Home(modifier: Modifier = Modifier) {
+    // the session panel is the whole page: the languages moved to 翻译, and no hint stands between them
+    SessionPanel(modifier)
 }
 
 /** 本次会话: everything said since the session started, with a filter and a way to keep it as text. */
 @Composable
-private fun SessionPanel() {
+private fun SessionPanel(modifier: Modifier = Modifier) {
     val running by CaptionService.runningState
     val session = CaptionService.current ?: CaptionService.lastSession
     val history = session?.overlay?.history?.value.orEmpty()
@@ -311,7 +254,7 @@ private fun SessionPanel() {
     val shown = if (query.isBlank()) history else history.filter {
         it.zh.contains(query, ignoreCase = true) || it.ja.orEmpty().contains(query, ignoreCase = true)
     }
-    Card {
+    Card(modifier) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             Text("本次会话", fontSize = 15.sp, fontWeight = FontWeight.SemiBold)
             Spacer(Modifier.width(8.dp))
@@ -325,12 +268,14 @@ private fun SessionPanel() {
         Field(query, { query = it }, "搜索这次会话的字幕")
         Spacer(Modifier.height(8.dp))
         if (shown.isEmpty()) {
-            Text(if (history.isEmpty()) "开始字幕后，这里会一条条列出这次说过的句子。" else "没有匹配的句子。",
-                color = C.muted, fontSize = 13.sp, modifier = Modifier.padding(vertical = 18.dp))
+            Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) {
+                Text(if (history.isEmpty()) "开始字幕后，这里会一条条列出这次说过的句子。" else "没有匹配的句子。",
+                    color = C.muted, fontSize = 13.sp, textAlign = TextAlign.Center)
+            }
         } else {
             val listScroll = rememberScrollState()
             LaunchedEffect(shown.size) { listScroll.scrollTo(listScroll.maxValue) }
-            Column(Modifier.fillMaxWidth().heightIn(max = 300.dp).verticalScroll(listScroll)) {
+            Column(Modifier.fillMaxWidth().weight(1f).verticalScroll(listScroll)) {
                 // newest last, like a chat: the list is read top-down while new lines appear at the bottom
                 for (l in shown) {
                     l.ja?.takeIf { it.isNotBlank() }?.let {
@@ -619,6 +564,48 @@ private val byokResult = mutableStateOf<String?>(null)
 private fun TranslateTab() {
     val running by CaptionService.runningState
     if (running) Note("字幕正在运行：内容类型、结合上文、去掉重复的字、LLM API（切换配置或点保存后）和 Jev 在线模型服务、key 改了从下一句开始生效；智能断句和检查译文从下次开始字幕时生效；显示方式马上生效。")
+    /** the 字幕语言 being typed for 自己填… (null: that editor is closed) */
+    var typing by remember { mutableStateOf<String?>(null) }
+    // the languages moved here from the home page: 识别语种 → 字幕语言, as one row
+    Group("语言") {
+        val asrLangs = listOf("ja" to "日语", "auto" to "自动（中日英韩粤）", "zh" to "中文", "ko" to "韩语", "yue" to "粤语")
+        val presets = Target.PRESETS
+        val current = prefs.targetLang
+        val targets = if (current in presets) presets else presets + current
+        // the captions share the two boxes' widths, so the arrow sits exactly between the dropdowns
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Text("识别语种", color = C.text, fontSize = 15.sp, fontWeight = FontWeight.Medium, modifier = Modifier.weight(1f))
+            Text("→", color = Color.Transparent, fontSize = 16.sp, modifier = Modifier.padding(horizontal = 10.dp))
+            Text("字幕语言", color = C.text, fontSize = 15.sp, fontWeight = FontWeight.Medium, modifier = Modifier.weight(1f))
+        }
+        Spacer(Modifier.height(6.dp))
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Dropdown(asrLangs.map { it.second }, asrLangs.indexOfFirst { it.first == prefs.asrSvLang }.coerceAtLeast(0), modifier = Modifier.weight(1f)) {
+                val code = asrLangs[it].first
+                prefs.asrSvLangSetting = code
+                prefs.sourceLang = Lang.of(code) // 识别成什么语种，翻译的源语言就跟着它
+            }
+            Text("→", color = C.muted, fontSize = 16.sp, modifier = Modifier.padding(horizontal = 10.dp))
+            Dropdown(targets.map { it.zh } + "自己填…", targets.indexOf(current), modifier = Modifier.weight(1f)) {
+                if (it == targets.size) typing = current.takeIf { c -> c.lang == null }?.name ?: ""
+                else { typing = null; prefs.targetLang = targets[it] }
+            }
+        }
+        // 自己填…: a typed language name, saved with 确定; 取消 or a blank name keeps the language in use
+        typing?.let { t ->
+            Spacer(Modifier.height(10.dp))
+            Field(t, { v -> typing = v.take(Target.MAX_NAME) }, "例如 繁体中文、粤语、文言文")
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Grow()
+                TextBtn("取消") { typing = null }
+                Btn("确定", primary = true, enabled = Target.custom(t) != null) {
+                    Target.custom(t)?.let { prefs.targetLang = it }; typing = null
+                }
+            }
+        }
+        Hint("「自动」容易把日语听成中文或英文，纯日语场次选「日语」，改了下次开始字幕时生效。")
+        Hint("字幕语言：识别出的文字翻成它，运行中改了从下一句开始生效。")
+    }
     Group("LLM API") { Byok(running); ByokAdvanced() }
     Group("内容") {
         Label("内容类型")
@@ -638,13 +625,7 @@ private fun TranslateTab() {
         SwitchRow("去掉重复的字", "一句话分段识别时，接口处偶尔会把同一段话识别两遍。打开后自动去掉多出来的那一遍；如果说话人真的重复说了，也可能被去掉。",
             prefs.dedupeJoin) { prefs.dedupeJoin = it }
     }
-    Group("语音识别") {
-        val langs = listOf("ja" to "日语", "auto" to "自动（中日英韩粤）", "zh" to "中文", "ko" to "韩语", "yue" to "粤语")
-        Label("识别语种")
-        Dropdown(langs.map { it.second }, langs.indexOfFirst { it.first == prefs.asrSvLang }.coerceAtLeast(0)) {
-            prefs.asrSvLangSetting = langs[it].first
-        }
-        Hint("直播里的句子只有零点几秒，让模型自己判语种容易把日语听成中文或英文。纯日语场次选「日语」；中日混说才用「自动」。下次开始字幕时生效。")
+    Group("断句") {
         val pauses = listOf(200, 300, 350, 500, 800)
         Label("停顿切段")
         Dropdown(pauses.map { "%.2f 秒".format(it / 1000f) }, pauses.indexOf(prefs.endSilenceMs).let { if (it < 0) 2 else it }) {
