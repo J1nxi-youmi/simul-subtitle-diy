@@ -887,8 +887,12 @@ class MainActivity : Activity() {
         return inner
     }
 
-    /** A switch with its title, and the description under it. */
-    private fun switchRow(box: LinearLayout, title: String, desc: String, on: Boolean, onChange: (Boolean) -> Unit): MaterialSwitch {
+    /**
+     * A switch with its title, and the description under it. [fold] keeps a long description to two lines with
+     * 展开 under it — the 记录 page has two paragraphs that otherwise bury the switches they belong to.
+     */
+    private fun switchRow(box: LinearLayout, title: String, desc: String, on: Boolean,
+                          fold: Boolean = false, onChange: (Boolean) -> Unit): MaterialSwitch {
         val s = MaterialSwitch(this).apply {
             text = title; textSize = 15f; setTextColor(getColor(R.color.text)); isChecked = on
             minHeight = (48 * dpx).toInt()
@@ -897,7 +901,9 @@ class MainActivity : Activity() {
         box.addView(s, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
             topMargin = (8 * dpx).toInt()
         })
-        box.addView(hint(desc).apply { setPadding(0, 0, (56 * dpx).toInt(), 0) })
+        val body: View = if (fold) foldHint(desc) else hint(desc)
+        body.setPadding(0, 0, (56 * dpx).toInt(), 0)
+        box.addView(body)
         return s
     }
 
@@ -1371,10 +1377,10 @@ class MainActivity : Activity() {
         listedLogs = files.map { it.name } to active
         // off by default; the switch takes effect from the next start (a running session keeps what it began with)
         switchRow(box, "记录每次使用", "打开后，每次开始字幕会在手机上留一份文字记录：识别结果、翻译的提示词和译文、在线 Decisions 模型辅助的请求和回答，不含 key；声音默认不记录，需要的话在下面单独打开。只有你点「分享」才会离开手机，出问题时可以发给开发者帮助排查。从下次开始字幕起生效。",
-            prefs.keepLogs) { prefs.keepLogs = it; renderLogs() }
+            prefs.keepLogs, fold = true) { prefs.keepLogs = it; renderLogs() }
         // a recording is only kept for a session that writes a log: this switch does nothing while 记录每次使用 is off
         switchRow(box, "同时保留音频", "默认关闭；只在上面「记录每次使用」打开时才生效。把每次字幕采集到的声音和文字记录一起存成录音文件，只保存在本机、不会上传，每分钟约 1.9 MB；总量超过 200 MB 时自动删除最旧的完整录音。从下次开始字幕起生效。",
-            prefs.recordAudio) { prefs.recordAudio = it }
+            prefs.recordAudio, fold = true) { prefs.recordAudio = it }
         if (files.isEmpty()) {
             box.addView(TextView(this).apply {
                 text = if (prefs.keepLogs) "还没有记录。" else "还没有记录。现在不记录，打开上面的开关后才会记录。"
@@ -1386,10 +1392,15 @@ class MainActivity : Activity() {
         val dp = resources.displayMetrics.density
         // all logs stay reachable: beyond 5 the list scrolls inside a fixed-height box instead of growing the page
         val rows = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        for (f in files) {
+        files.forEachIndexed { i, f ->
+            // a hairline between records: without one three rows read as one block, and a thumb lands on the
+            // wrong record's 删除
+            if (i > 0) rows.addView(View(this).apply { setBackgroundColor(getColor(R.color.line2)) },
+                LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, (1 * dp).toInt().coerceAtLeast(1)))
             val row = LinearLayout(this).apply {
                 orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
-                setPadding(0, (4 * dp).toInt(), 0, (4 * dp).toInt())
+                minimumHeight = (68 * dp).toInt()
+                setPadding(0, (10 * dp).toInt(), 0, (10 * dp).toInt())
             }
             val texts = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
             // session-20261010-151200[-1].jsonl[.part] → 2026-10-10 15:12:00
@@ -1410,16 +1421,24 @@ class MainActivity : Activity() {
                 textSize = 13.5f; setTextColor(getColor(R.color.text2))
             })
             row.addView(texts, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
-            row.addView(MaterialButton(this, null, com.google.android.material.R.attr.borderlessButtonStyle).apply {
+            // both are outlined buttons with a hairline: the theme turns materialButtonOutlinedStyle into the
+            // borderless segmented look, which is what made them read as plain text
+            row.addView(MaterialButton(this, null, R.style.Widget_JpSub_ActionButton).apply {
+                text = "分享"; isEnabled = f !in active
+                minimumHeight = (48 * dp).toInt()
+                setPadding((12 * dp).toInt(), 0, (12 * dp).toInt(), 0)
+                setOnClickListener { share(f) }
+            })
+            row.addView(MaterialButton(this, null, R.style.Widget_JpSub_ActionButton).apply {
                 text = "删除"; setTextColor(getColor(R.color.err)); isEnabled = f !in active
-                minWidth = 0; minimumWidth = 0; setPadding((10 * dp).toInt(), 0, (10 * dp).toInt(), 0)
+                minimumHeight = (48 * dp).toInt()
+                setPadding((12 * dp).toInt(), 0, (12 * dp).toInt(), 0)
                 setOnClickListener { confirmDelete("删除 $title 的记录？", "这条记录如果有音频，会一起删除。删除后不能恢复。") {
                     if (!SessionFiles.deleteLog(f)) Toast.makeText(this@MainActivity, "删除失败：记录正在写入或文件被占用", Toast.LENGTH_SHORT).show()
                     renderLogs()
                 } }
-            })
-            row.addView(MaterialButton(this, null, com.google.android.material.R.attr.materialButtonOutlinedStyle).apply {
-                text = "分享"; isEnabled = f !in active; setOnClickListener { share(f) }
+            }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
+                marginStart = (6 * dp).toInt()
             })
             rows.addView(row)
         }
@@ -1439,6 +1458,11 @@ class MainActivity : Activity() {
             box.addView(scroller, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, (LOGS_BEFORE_SCROLL * 58 * dp + 28 * dp).toInt()))
         } else box.addView(rows)
         val deletable = files.count { it !in active }
+        // a hairline above the totals, so 全部清空 is not mistaken for part of the last record
+        box.addView(View(this).apply { setBackgroundColor(getColor(R.color.line2)) },
+            LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, (1 * dp).toInt().coerceAtLeast(1)).apply {
+                topMargin = (6 * dp).toInt()
+            })
         box.addView(LinearLayout(this).apply {
             orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL
             setPadding(0, (6 * dp).toInt(), 0, 0)
@@ -1447,8 +1471,10 @@ class MainActivity : Activity() {
                 text = "共 ${files.size} 个，" + sizeText(SessionFiles.totalBytes(root))
                 textSize = 12.5f; setTextColor(getColor(R.color.text2))
             }, LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f))
-            addView(MaterialButton(this@MainActivity, null, com.google.android.material.R.attr.borderlessButtonStyle).apply {
+            addView(MaterialButton(this@MainActivity, null, R.style.Widget_JpSub_ActionButton).apply {
                 text = "全部清空"; setTextColor(getColor(R.color.err)); isEnabled = deletable > 0
+                minimumHeight = (40 * dp).toInt()
+                setPadding((12 * dp).toInt(), 0, (12 * dp).toInt(), 0)
                 setOnClickListener { confirmDelete("删除全部 $deletable 个记录？", "正在记录的不会删除；音频会跟着它的记录一起删除。删除后不能恢复。") {
                     val left = SessionFiles.deleteAll(root)
                     if (left > 0) Toast.makeText(this@MainActivity, "还剩 $left 个（正在记录或无法删除）", Toast.LENGTH_SHORT).show()
