@@ -187,7 +187,7 @@ class MainActivity : Activity() {
         applyInsets()
         reveal(findViewById<View>(PAGES[page].root))
         when (page) {
-            0 -> renderSession()
+            0 -> { renderSession(); sizeSessionScroll(true) }
             1 -> { loadStyle(); findViewById<View>(R.id.previewStage).post { loadStyle() } }
             2 -> renderLang()
             4 -> renderLogs()
@@ -478,9 +478,20 @@ class MainActivity : Activity() {
     private var sessionQuery = ""
     /** What the list was last built from: a new sentence or a new query rebuilds it, the ticker alone does not. */
     private var sessionSig: Pair<Int, String>? = null
+    private lateinit var sessionList: LinearLayout
+    private lateinit var sessionScroll: android.widget.ScrollView
 
     /** The search box, 导出… and 清空; the list itself is [renderSession]'s. */
     private fun setupSession() {
+        sessionList = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        sessionScroll = innerScroller().apply {
+            isVerticalScrollBarEnabled = true
+            isScrollbarFadingEnabled = false
+            addView(sessionList, FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.WRAP_CONTENT))
+        }
+        findViewById<FrameLayout>(R.id.sessionScrollBox).addView(sessionScroll, FrameLayout.LayoutParams(
+            FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.WRAP_CONTENT))
         findViewById<android.widget.EditText>(R.id.sessionSearch).addTextChangedListener(object : android.text.TextWatcher {
             override fun beforeTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
             override fun onTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
@@ -501,8 +512,24 @@ class MainActivity : Activity() {
     }
 
     /**
-     * 本次会话: what was said since the session started, newest last, at most [SESSION_LINES] of them and filtered
-     * by the search box. Exporting keeps all of them; nothing here is written to disk (记录 does that).
+     * A scroller that lives inside the page's ScrollView: while it has room to move it keeps the drag, once it
+     * reaches an end the page takes over. A plain nested ScrollView never sees the gesture — the page eats it.
+     */
+    private fun innerScroller() = object : android.widget.ScrollView(this) {
+        override fun onTouchEvent(e: android.view.MotionEvent): Boolean {
+            parent.requestDisallowInterceptTouchEvent(canScrollVertically(1) || canScrollVertically(-1))
+            return super.onTouchEvent(e)
+        }
+        override fun onInterceptTouchEvent(e: android.view.MotionEvent): Boolean {
+            if (e.actionMasked == android.view.MotionEvent.ACTION_DOWN) parent.requestDisallowInterceptTouchEvent(true)
+            return super.onInterceptTouchEvent(e)
+        }
+    }
+
+    /**
+     * 本次会话: every finished sentence of this session, newest last, in a list that scrolls by itself instead of
+     * dropping the oldest line whenever a new one arrives. New lines are followed while the reader is at the
+     * bottom; scrolled up, the view stays where they put it. 导出 keeps every line, 清空 empties the lot.
      */
     private fun renderSession() {
         val all = CaptionService.history
@@ -516,21 +543,53 @@ class MainActivity : Activity() {
         val empty = findViewById<TextView>(R.id.sessionEmpty)
         empty.text = if (all.isEmpty()) "开始字幕后，这里会一条条列出这次说过的句子。" else "没有匹配的句子。"
         empty.visibility = if (matched.isEmpty()) View.VISIBLE else View.GONE
+        findViewById<View>(R.id.sessionScrollBox).visibility = if (matched.isEmpty()) View.GONE else View.VISIBLE
         val sig = matched.size to q
         if (sessionSig == sig) return
+        // was the reader looking at the newest line? then the rebuild should leave them there
+        val atBottom = sessionList.childCount == 0 ||
+            sessionScroll.scrollY + sessionScroll.height >= sessionList.height - 12
         sessionSig = sig
-        val list = findViewById<LinearLayout>(R.id.sessionList)
-        list.removeAllViews()
-        for (l in matched.takeLast(SESSION_LINES)) {
+        sessionList.removeAllViews()
+        // a long session would mean thousands of views; the newest few hundred are enough to read through, and
+        // 导出 still carries all of them
+        val shown = matched.takeLast(SESSION_MAX_ROWS)
+        if (shown.size < matched.size) {
+            sessionList.addView(TextView(this).apply {
+                text = "…前面还有 ${matched.size - shown.size} 句，导出可以拿到全部"
+                textSize = 12f; setTextColor(getColor(R.color.muted))
+                setPadding(0, (6 * dpx).toInt(), 0, (4 * dpx).toInt())
+            })
+        }
+        for (l in shown) {
             l.ja?.takeIf { it.isNotBlank() }?.let { ja ->
-                list.addView(TextView(this).apply {
+                sessionList.addView(TextView(this).apply {
                     text = ja; textSize = 12f; setTextColor(getColor(R.color.muted)); setLineSpacing(2 * dpx, 1f)
                 })
             }
-            list.addView(TextView(this).apply {
+            sessionList.addView(TextView(this).apply {
                 text = l.zh; textSize = 13.5f; setTextColor(getColor(R.color.text)); setLineSpacing(2 * dpx, 1f)
                 setPadding(0, 0, 0, (8 * dpx).toInt())
             })
+        }
+        // the card grows with the list until that stops being reasonable, then the list scrolls inside it
+        sizeSessionScroll(atBottom)
+    }
+
+    /**
+     * Gives the transcript the height it needs, up to about 260 dp; a list measured while 首页 is hidden is 0 px
+     * tall, so it is left alone rather than collapsed — [selectPage] re-sizes it when the page comes back.
+     */
+    private fun sizeSessionScroll(follow: Boolean) {
+        sessionList.post {
+            if (sessionList.height <= 0) return@post
+            val max = (260 * dpx).toInt()
+            val h = minOf(sessionList.height, max)
+            if (sessionScroll.layoutParams.height != h) {
+                sessionScroll.layoutParams = sessionScroll.layoutParams.apply { height = h }
+                sessionScroll.requestLayout()
+            }
+            if (follow) sessionScroll.fullScroll(View.FOCUS_DOWN)
         }
     }
 
@@ -1612,7 +1671,7 @@ class MainActivity : Activity() {
         /** where the project lives (set by the author; the repository may not be public yet) */
         // DIY: 指向自己的 fork——上游 release 的签名和本包不一致，应用内更新装不上
         const val REPO_URL = "https://github.com/J1nxi-youmi/simul-subtitle-diy"
-        /** 本次会话 lists at most this many lines; exporting keeps all of them */
-        const val SESSION_LINES = 8
+        /** 本次会话 builds at most this many sentences into views; 导出 always has the whole session */
+        const val SESSION_MAX_ROWS = 300
     }
 }

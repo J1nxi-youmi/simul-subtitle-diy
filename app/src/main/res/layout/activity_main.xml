@@ -177,12 +177,14 @@
                             android:textColorHint="@color/muted"
                             android:textSize="14sp" />
 
-                        <LinearLayout
-                            android:id="@+id/sessionList"
+                        <!-- the transcript goes in here: built in code, it scrolls on its own once it outgrows
+                             the card, so the whole session stays reachable instead of the newest lines pushing
+                             the older ones out -->
+                        <FrameLayout
+                            android:id="@+id/sessionScrollBox"
                             android:layout_width="match_parent"
                             android:layout_height="wrap_content"
-                            android:orientation="vertical"
-                            android:paddingTop="4dp" />
+                            android:layout_marginTop="4dp" />
 
                         <TextView
                             android:id="@+id/sessionEmpty"
