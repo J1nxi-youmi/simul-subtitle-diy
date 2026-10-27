@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- A bottom-bar label: ink when it is the page on screen, the quiet label grey otherwise. -->
+<selector xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:state_selected="true" android:color="@color/text" />
+    <item android:color="@color/label" />
+</selector>

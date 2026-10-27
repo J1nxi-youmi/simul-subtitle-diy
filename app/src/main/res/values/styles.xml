@@ -1,6 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- magpie's .label: small grey caps-weight title above a list -->
+    <!-- magpie's .label: small grey caps-weight title above a list. CJK has no case, so the
+         tracking stays small; the colour is @color/label (4.6:1 on bg, muted is only 3.3:1) -->
     <style name="SectionTitle">
         <item name="android:layout_width">match_parent</item>
         <item name="android:layout_height">wrap_content</item>
@@ -8,10 +9,10 @@
         <item name="android:layout_marginBottom">6dp</item>
         <item name="android:paddingStart">8dp</item>
         <item name="android:paddingEnd">8dp</item>
-        <item name="android:textColor">@color/muted</item>
+        <item name="android:textColor">@color/label</item>
         <item name="android:textSize">12sp</item>
         <item name="android:textStyle">bold</item>
-        <item name="android:letterSpacing">0.05</item>
+        <item name="android:letterSpacing">0.03</item>
     </style>
     <!-- magpie's .list: white card, 12dp corners, a hairline edge instead of a shadow -->
     <style name="ListCard" parent="Widget.Material3.CardView.Outlined">
@@ -131,5 +132,36 @@
         <item name="android:layout_height">1dp</item>
         <item name="android:layout_marginStart">14dp</item>
         <item name="android:background">@color/line2</item>
+    </style>
+    <!-- a status chip under the start button: a dot and a short line, as on the PC -->
+    <style name="Chip">
+        <item name="android:layout_width">wrap_content</item>
+        <item name="android:layout_height">wrap_content</item>
+        <item name="android:background">@drawable/chip_bg</item>
+        <item name="android:paddingStart">10dp</item>
+        <item name="android:paddingEnd">11dp</item>
+        <item name="android:paddingVertical">5dp</item>
+        <item name="android:drawablePadding">6dp</item>
+        <item name="android:gravity">center_vertical</item>
+        <item name="android:textColor">@color/text2</item>
+        <item name="android:textSize">12sp</item>
+        <item name="android:maxLines">1</item>
+        <item name="android:ellipsize">end</item>
+    </style>
+    <!-- one tab of the bottom bar: the PC sidebar's item, laid on its side -->
+    <style name="NavItem">
+        <item name="android:layout_width">0dp</item>
+        <item name="android:layout_height">wrap_content</item>
+        <item name="android:layout_weight">1</item>
+        <item name="android:layout_marginHorizontal">2dp</item>
+        <item name="android:layout_marginVertical">3dp</item>
+        <item name="android:minHeight">46dp</item>
+        <item name="android:gravity">center</item>
+        <item name="android:paddingHorizontal">4dp</item>
+        <item name="android:textSize">13sp</item>
+        <item name="android:textColor">@color/nav_text</item>
+        <item name="android:background">@drawable/nav_item_bg</item>
+        <item name="android:clickable">true</item>
+        <item name="android:focusable">true</item>
     </style>
 </resources>

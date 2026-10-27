@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- A text field: a filled box with a hairline, an indigo outline while it has the cursor.
+     The card-coloured fill on focus is deliberate: the focused field is the one that grows
+     to the keyboard, and a white box separates it from the card behind. -->
+<selector xmlns:android="http://schemas.android.com/apk/res/android">
+    <item android:state_focused="true">
+        <shape android:shape="rectangle">
+            <solid android:color="@color/card" />
+            <corners android:radius="10dp" />
+            <stroke
+                android:width="2dp"
+                android:color="@color/brand" />
+        </shape>
+    </item>
+    <item>
+        <shape android:shape="rectangle">
+            <solid android:color="@color/field" />
+            <corners android:radius="10dp" />
+            <stroke
+                android:width="1dp"
+                android:color="@color/line" />
+        </shape>
+    </item>
+</selector>

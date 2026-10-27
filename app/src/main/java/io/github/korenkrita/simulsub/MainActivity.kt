@@ -71,11 +71,23 @@ class MainActivity : Activity() {
         super.onCreate(savedInstanceState)
         setTheme(R.style.Theme_JpSub)
         setContentView(R.layout.activity_main)
-        // targetSdk 35 draws edge-to-edge: pad the scroll content by the system bars instead of a black status bar
-        val scroll = findViewById<View>(R.id.scroll)
-        scroll.setOnApplyWindowInsetsListener { v, insets ->
+        // targetSdk 35 draws edge-to-edge: the status bar, the navigation bar, a cutout and the keyboard are
+        // paddings here, not black strips. The action bar keeps the navigation inset itself (its button must not
+        // sit in the gesture area); the page takes the keyboard's height while the bar is away, so a field on the
+        // settings pages can be scrolled above the keyboard.
+        findViewById<View>(R.id.root).setOnApplyWindowInsetsListener { _, insets ->
+            val bars = if (Build.VERSION.SDK_INT >= 30)
+                insets.getInsets(android.view.WindowInsets.Type.systemBars() or android.view.WindowInsets.Type.displayCutout())
+            else null
             @Suppress("DEPRECATION") // API 29 has no WindowInsets.Type; these still work on 30+
-            v.setPadding(0, insets.systemWindowInsetTop, 0, insets.systemWindowInsetBottom); insets
+            val top = bars?.top ?: insets.systemWindowInsetTop
+            @Suppress("DEPRECATION")
+            val bottom = bars?.bottom ?: insets.systemWindowInsetBottom
+            statusInset = top
+            navInset = bottom
+            imeInset = if (Build.VERSION.SDK_INT >= 30) insets.getInsets(android.view.WindowInsets.Type.ime()).bottom else 0
+            applyInsets()
+            insets
         }
         prefs = Prefs(this)
 
@@ -95,22 +107,17 @@ class MainActivity : Activity() {
                 if (prefs.theme != it) { prefs.theme = it; recreate() }
             })
         }
-        // the settings categories, magpie's preferences tabs: one list shown at a time. The saved category is read
-        // first, so the switch is built with it checked (a theme change recreates the activity on 页面)
-        tab = savedInstanceState?.getInt("tab", 0)?.coerceIn(TABS.indices) ?: 0
-        findViewById<android.widget.FrameLayout>(R.id.tabBox).addView(choice(TABS.indices.map { it to TABS[it].second }, tab) { showTab(it) })
-        findViewById<View>(R.id.openSettings).setOnClickListener { showSettings(true) }
-        findViewById<View>(R.id.closeSettings).setOnClickListener { back() }
-        findViewById<View>(R.id.openSize).setOnClickListener { showSize(true) }
+        // the five sections of the PC sidebar as a bottom bar. The saved one is read first, so the bar comes up
+        // with the right tab already lit (a theme change recreates the activity on 页面)
+        page = savedInstanceState?.getInt("page", 0)?.coerceIn(PAGES.indices) ?: 0
+        PAGES.forEachIndexed { i, s -> findViewById<View>(s.nav).setOnClickListener { selectPage(i) } }
         findViewById<TextView>(R.id.aboutVersion).text = "${getString(R.string.app_name)}  版本 ${BuildConfig.VERSION_NAME}"
         findViewById<View>(R.id.openRepo).setOnClickListener {
             try { startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(REPO_URL))) }
             catch (_: android.content.ActivityNotFoundException) { }
         }
-        // a theme switch recreates the activity from the settings page: stay there, on the same category / page
-        showTab(tab)
-        showSettings(savedInstanceState?.getBoolean("settings") == true)
-        if (inSettings && savedInstanceState?.getBoolean("sizePage") == true) showSize(true)
+        setupSession()
+        selectPage(page)
         updater = AppUpdater(this)
         // a rotation or theme change is not an entry into the app (unless it cancelled a check that was running)
         configRecreated = savedInstanceState?.getBoolean("configChange") == true
@@ -118,51 +125,81 @@ class MainActivity : Activity() {
         manualCheckStopped = false
     }
 
-    private var inSettings = false
-    /** Index into [TABS]: the settings category shown. */
-    private var tab = 0
-    /** The size page (字幕 › 字幕框大小和保留几句) is open over the 字幕 category. */
-    private var inSize = false
+    /** Index into [PAGES]: the section on screen. */
+    private var page = 0
 
-    private fun showSettings(on: Boolean) {
-        inSettings = on
-        findViewById<View>(R.id.homePage).visibility = if (on) View.GONE else View.VISIBLE
-        findViewById<View>(R.id.settingsPage).visibility = if (on) View.VISIBLE else View.GONE
+    /** One section of the bottom bar: its page, its tab and the title the header shows for it. */
+    private data class Section(val root: Int, val nav: Int, val title: String)
+
+    private val PAGES = listOf(
+        Section(R.id.pageHome, R.id.navHome, "同传字幕"),
+        Section(R.id.pageCaption, R.id.navCaption, "字幕"),
+        Section(R.id.pageTranslate, R.id.navTranslate, "翻译"),
+        Section(R.id.pagePage, R.id.navPage, "页面"),
+        Section(R.id.pageRecords, R.id.navRecords, "记录"),
+    )
+
+    // insets from the root view's listener (onCreate): the status bar, the navigation bar, the keyboard
+    private var statusInset = 0
+    private var navInset = 0
+    private var imeInset = 0
+
+    /**
+     * The status bar above the header, the navigation bar under the bottom bar (so the tabs never sit in the
+     * gesture area), and the keyboard's height on the page while the action bar is away — that is the settings
+     * pages, where the fields are.
+     */
+    private fun applyInsets() {
+        val barShown = findViewById<View>(R.id.actionBar).visibility == View.VISIBLE
+        findViewById<View>(R.id.root).setPadding(0, statusInset, 0, 0)
+        findViewById<View>(R.id.scroll).setPadding(0, 0, 0, if (barShown) 0 else maxOf(navInset, imeInset))
+        findViewById<View>(R.id.actionBar).setPadding(0, 0, 0, navInset)
+        findViewById<View>(R.id.navBar).setPadding((6 * dpx).toInt(), (4 * dpx).toInt(), (6 * dpx).toInt(), (4 * dpx).toInt() + navInset)
+    }
+
+    /** A page coming in: a short rise and fade, so a section switch does not just flash. */
+    private fun reveal(v: View) {
+        v.animate().cancel()
+        v.alpha = 0f
+        v.translationY = 8 * dpx
+        // the end action repeats what the animator finishes with: a cancelled animation must never leave it at 0
+        v.animate().alpha(1f).translationY(0f).setDuration(150)
+            .setInterpolator(android.view.animation.DecelerateInterpolator())
+            .withEndAction { v.alpha = 1f; v.translationY = 0f }.start()
+    }
+
+    /**
+     * One section of the PC sidebar, on screen. The bar, the header title and the one action bar follow it; the
+     * 字幕 page re-measures its live preview once it is laid out, 记录 rebuilds its list.
+     */
+    private fun selectPage(i: Int) {
+        page = i.coerceIn(PAGES.indices)
+        PAGES.forEachIndexed { n, s ->
+            findViewById<View>(s.root).visibility = if (n == page) View.VISIBLE else View.GONE
+            findViewById<View>(s.nav).isSelected = n == page
+            findViewById<TextView>(s.nav).typeface = if (n == page) android.graphics.Typeface.DEFAULT_BOLD
+                else android.graphics.Typeface.DEFAULT
+        }
+        findViewById<TextView>(R.id.pageTitle).text = PAGES[page].title
+        findViewById<View>(R.id.pageSub).visibility = if (page == 0) View.VISIBLE else View.GONE
+        findViewById<View>(R.id.actionBar).visibility = if (page == 0) View.VISIBLE else View.GONE
         findViewById<android.widget.ScrollView>(R.id.scroll).scrollTo(0, 0)
-        if (on) {
-            loadStyle() // the preview needs the stage's real width, known once the page is laid out
-            findViewById<View>(R.id.previewStage).post { loadStyle() }
-        } else { showSize(false); renderLang() }
+        applyInsets()
+        reveal(findViewById<View>(PAGES[page].root))
+        when (page) {
+            0 -> renderSession()
+            1 -> { loadStyle(); findViewById<View>(R.id.previewStage).post { loadStyle() } }
+            2 -> renderLang()
+            4 -> renderLogs()
+        }
     }
 
-    private fun showTab(i: Int) {
-        tab = i
-        TABS.forEachIndexed { n, (id, _) -> findViewById<View>(id).visibility = if (n == i && !inSize) View.VISIBLE else View.GONE }
-        findViewById<android.widget.ScrollView>(R.id.scroll).scrollTo(0, 0)
-        if (TABS[i].first == R.id.tabCaption && inSettings) findViewById<View>(R.id.previewStage).post { loadStyle() }
-    }
-
-    /** The size page replaces the categories and the 字幕 list; back returns to them. */
-    private fun showSize(on: Boolean) {
-        inSize = on
-        findViewById<View>(R.id.sizePage).visibility = if (on) View.VISIBLE else View.GONE
-        findViewById<View>(R.id.tabBox).visibility = if (on) View.GONE else View.VISIBLE
-        findViewById<TextView>(R.id.settingsTitle).text = if (on) "字幕框大小和保留几句" else "设置"
-        showTab(if (on) TABS.indexOfFirst { it.first == R.id.tabCaption } else tab)
-    }
-
-    /** One step back: size page → settings → home → leave. */
-    private fun back(): Boolean = when {
-        inSize -> { showSize(false); true }
-        inSettings -> { showSettings(false); true }
-        else -> false
-    }
+    /** One step back: any section returns to 首页 before the app closes. */
+    private fun back(): Boolean = if (page != 0) { selectPage(0); true } else false
 
     override fun onSaveInstanceState(outState: Bundle) {
         super.onSaveInstanceState(outState)
-        outState.putBoolean("settings", inSettings)
-        outState.putInt("tab", tab)
-        outState.putBoolean("sizePage", inSize)
+        outState.putInt("page", page)
         // recreated right away for a rotation / theme (no check then), unless that stops a check under way; a state
         // saved for a process the system may end is not this, and the restored app checks again
         outState.putBoolean("configChange", isChangingConfigurations && !updater.checking)
@@ -225,7 +262,7 @@ class MainActivity : Activity() {
     /** 其他（自己填）: a language name typed in, saved with 确定; cancel or a blank name keeps the language in use. */
     private fun askTargetName() {
         val now = prefs.targetLang.takeIf { it.lang == null }?.name ?: ""
-        val input = android.widget.EditText(this).apply {
+        val input = android.widget.EditText(this).asField().apply {
             setText(now); setSelection(now.length); isSingleLine = true; hint = "例如 繁体中文、粤语、文言文"
             filters = arrayOf(android.text.InputFilter.LengthFilter(Target.MAX_NAME))
         }
@@ -246,7 +283,7 @@ class MainActivity : Activity() {
     }
 
     private fun askProfileName(p: LlmProfile?, now: String, rename: Boolean) {
-        val input = android.widget.EditText(this).apply {
+        val input = android.widget.EditText(this).asField().apply {
             setText(now); setSelection(now.length); isSingleLine = true; hint = "例如 千问、DeepSeek"
             filters = arrayOf(android.text.InputFilter.LengthFilter(LlmProfile.MAX_NAME))
         }
@@ -280,7 +317,7 @@ class MainActivity : Activity() {
      * 保存 checks the text and keeps the dialog open on a mistake; 删除 a user's scene, 恢复默认 an edited built-in.
      */
     private fun editScene(old: Scene?) {
-        fun area(value: String, hintText: String, lines: Int) = android.widget.EditText(this).apply {
+        fun area(value: String, hintText: String, lines: Int) = android.widget.EditText(this).asField().apply {
             setText(value); hint = hintText; textSize = 15f; setTextColor(getColor(R.color.text))
             inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_FLAG_MULTI_LINE
             minLines = lines; maxLines = 8; gravity = Gravity.TOP or Gravity.START
@@ -290,7 +327,7 @@ class MainActivity : Activity() {
             orientation = LinearLayout.VERTICAL
             setPadding((22 * dpx).toInt(), (4 * dpx).toInt(), (22 * dpx).toInt(), 0)
         }
-        val name = android.widget.EditText(this).apply {
+        val name = android.widget.EditText(this).asField().apply {
             setText(old?.label ?: ""); hint = "例如 游戏实况、某主播的直播"; isSingleLine = true
             filters = arrayOf(android.text.InputFilter.LengthFilter(Scene.MAX_LABEL))
         }
@@ -300,7 +337,7 @@ class MainActivity : Activity() {
         fun termBox(field: Int) = (0 until termBox.childCount).map { (termBox.getChildAt(it) as LinearLayout).getChildAt(field) as android.widget.EditText }
         fun rows() = termBox(0).zip(termBox(2)) { a, b -> a.text.toString() to b.text.toString() }
         fun addRow(src: String, dst: String) {
-            fun box(v: String, h: String) = android.widget.EditText(this).apply {
+            fun box(v: String, h: String) = android.widget.EditText(this).asField().apply {
                 setText(v); hint = h; isSingleLine = true; textSize = 15f; setTextColor(getColor(R.color.text))
                 filters = arrayOf(android.text.InputFilter.LengthFilter(Scene.MAX_TERM))
                 importantForAutofill = View.IMPORTANT_FOR_AUTOFILL_NO
@@ -436,26 +473,82 @@ class MainActivity : Activity() {
         }
     }
 
-    /** The home card's last row: the LLM API translations go to (or that none is set up yet); opens 设置 › 翻译. */
-    private fun renderService() {
-        val host = ByokTranslator.chatUrl(prefs.byokUrl).second?.let { android.net.Uri.parse(it).host }
-        findViewById<TextView>(R.id.serviceText).text =
-            if (prefs.byokReady) {
-                val p = prefs.byokProfile.name.takeIf { prefs.byokProfiles.size > 1 }
-                "翻译：" + (if (p != null) "$p · " else "") + "${prefs.byokModel} · $host"
-            } else "翻译：还没填 LLM API"
-        findViewById<View>(R.id.serviceRow).setOnClickListener { openTranslate() }
+    // ---- 本次会话 ------------------------------------------------------------------------------------------
+
+    private var sessionQuery = ""
+    /** What the list was last built from: a new sentence or a new query rebuilds it, the ticker alone does not. */
+    private var sessionSig: Pair<Int, String>? = null
+
+    /** The search box, 导出… and 清空; the list itself is [renderSession]'s. */
+    private fun setupSession() {
+        findViewById<android.widget.EditText>(R.id.sessionSearch).addTextChangedListener(object : android.text.TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
+            override fun onTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
+            override fun afterTextChanged(s: android.text.Editable?) {
+                sessionQuery = s?.toString().orEmpty()
+                sessionSig = null
+                renderSession()
+            }
+        })
+        findViewById<View>(R.id.sessionExport).setOnClickListener { shareSession() }
+        findViewById<View>(R.id.sessionClear).setOnClickListener {
+            CaptionService.clearHistory()
+            sessionSig = null
+            renderSession()
+        }
+        // a recreated activity restores the box's text by id before this runs: filter by what it actually shows
+        sessionQuery = findViewById<android.widget.EditText>(R.id.sessionSearch).text?.toString().orEmpty()
     }
 
-    /** 设置 › 翻译, where the LLM API is filled in. */
-    private fun openTranslate() {
-        showSettings(true)
-        // through the category switch, so its checked button follows (its listener shows the tab)
-        val g = findViewById<android.widget.FrameLayout>(R.id.tabBox).getChildAt(0) as com.google.android.material.button.MaterialButtonToggleGroup
-        val want = TABS.indexOfFirst { it.first == R.id.tabTranslate }
-        (0 until g.childCount).map { g.getChildAt(it) }.firstOrNull { it.tag == want }?.let { g.check(it.id) }
+    /**
+     * 本次会话: what was said since the session started, newest last, at most [SESSION_LINES] of them and filtered
+     * by the search box. Exporting keeps all of them; nothing here is written to disk (记录 does that).
+     */
+    private fun renderSession() {
+        val all = CaptionService.history
+        val q = sessionQuery.trim()
+        val matched = if (q.isEmpty()) all else all.filter {
+            it.zh.contains(q, ignoreCase = true) || it.ja?.contains(q, ignoreCase = true) == true
+        }
+        findViewById<TextView>(R.id.sessionCount).text = if (q.isEmpty()) "${all.size} 条" else "${matched.size} / ${all.size} 条"
+        findViewById<View>(R.id.sessionExport).isEnabled = all.isNotEmpty()
+        findViewById<View>(R.id.sessionClear).isEnabled = all.isNotEmpty()
+        val empty = findViewById<TextView>(R.id.sessionEmpty)
+        empty.text = if (all.isEmpty()) "开始字幕后，这里会一条条列出这次说过的句子。" else "没有匹配的句子。"
+        empty.visibility = if (matched.isEmpty()) View.VISIBLE else View.GONE
+        val sig = matched.size to q
+        if (sessionSig == sig) return
+        sessionSig = sig
+        val list = findViewById<LinearLayout>(R.id.sessionList)
+        list.removeAllViews()
+        for (l in matched.takeLast(SESSION_LINES)) {
+            l.ja?.takeIf { it.isNotBlank() }?.let { ja ->
+                list.addView(TextView(this).apply {
+                    text = ja; textSize = 12f; setTextColor(getColor(R.color.muted)); setLineSpacing(2 * dpx, 1f)
+                })
+            }
+            list.addView(TextView(this).apply {
+                text = l.zh; textSize = 13.5f; setTextColor(getColor(R.color.text)); setLineSpacing(2 * dpx, 1f)
+                setPadding(0, 0, 0, (8 * dpx).toInt())
+            })
+        }
     }
 
+    /** 导出…: the whole session as plain text through the share sheet — no file to find and delete later. */
+    private fun shareSession() {
+        val all = CaptionService.history
+        if (all.isEmpty()) return
+        val text = all.joinToString("\n\n") { l -> l.ja?.takeIf { it.isNotBlank() }?.let { "$it\n${l.zh}" } ?: l.zh }
+        val stamp = java.text.SimpleDateFormat("yyyyMMdd-HHmm", java.util.Locale.US).format(java.util.Date())
+        val send = Intent(Intent.ACTION_SEND).apply {
+            type = "text/plain"
+            putExtra(Intent.EXTRA_TEXT, text)
+            putExtra(Intent.EXTRA_SUBJECT, "字幕 $stamp")
+        }
+        startActivity(Intent.createChooser(send, "导出字幕"))
+    }
+
+    /** 翻译, where the LLM API is filled in. */
     override fun onResume() {
         super.onResume()
         loadStyle() // the overlay toolbar may have changed size / opacity / mode meanwhile (no listener while paused)
@@ -467,6 +560,11 @@ class MainActivity : Activity() {
         render()
         main.post(ticker)
         updater.resume()
+        // back from the overlay permission page after tapping 开始字幕: carry on where that tap left off
+        if (startPending) {
+            startPending = false
+            if (Settings.canDrawOverlays(this)) main.post { start() }
+        }
     }
 
     override fun onPause() {
@@ -488,6 +586,7 @@ class MainActivity : Activity() {
     private val ticker = object : Runnable {
         override fun run() {
             render()
+            renderSession()
             // the translation switches are disabled while a session runs
             if (CaptionService.running != translateRunning) { renderTranslate(); renderLang() }
             // a session started or finished (its .part renamed): the list must not keep buttons for files that moved
@@ -501,11 +600,14 @@ class MainActivity : Activity() {
 
     /** The last start was refused by the system (foreground service not allowed); kept until the next start tap. */
     private var startRefused = false
+    /** 开始字幕 sent the user to the system's overlay page; the start continues when they come back. */
+    private var startPending = false
 
     private fun render() {
         progress.visibility = View.GONE
         secondary.visibility = View.GONE
         primary.isEnabled = true
+        renderChips()
         if (CaptionService.running) {
             status(R.color.ok, "字幕正在显示", "回到你要看的视频或直播就行。\n点一下字幕，可以调大小或停止。")
             primary.text = "停止字幕"; primary.setIconResource(R.drawable.ic_stop)
@@ -516,18 +618,13 @@ class MainActivity : Activity() {
         } else {
             val missingPerm = !hasAudio() || !Settings.canDrawOverlays(this)
             val hint = if (missingPerm) "点下面的按钮，按提示允许下方两项，就能开始。" else "点下面的按钮，再在弹出的窗口里选你要看的 App。"
-            renderService()
-            if (!prefs.byokReady) {
-                // nothing else to set up: without an LLM API there is nothing to start, so the one action goes there
-                status(R.color.warn, "先填翻译用的 LLM API", "服务地址和模型已经填好了，只需要粘贴你的 API Key，点「测试连接」就能开始。声音识别已经装在 App 里，不用下载。")
-                primary.text = "去填写"; primary.setIconResource(R.drawable.ic_settings)
-                primary.backgroundTintList = ColorStateList.valueOf(getColor(R.color.brand))
-                onPrimary(R.color.on_brand)
-                primary.setOnClickListener { openTranslate() }
-                return
+            when {
+                // the button keeps saying 开始字幕 on a fresh install too: the tap goes to the page that fills in
+                // what is missing instead of quietly doing nothing
+                !prefs.byokReady -> status(R.color.warn, "先填翻译用的 LLM API", "服务地址和模型已经填好了，只需要粘贴你的 API Key，点「测试连接」就能开始。声音识别已经装在 App 里，不用下载。")
+                startRefused -> status(R.color.err, "手机暂时不让字幕启动", "请再点一次开始。如果还是不行，请反馈出现这个提示前做了什么。")
+                else -> status(R.color.brand, if (missingPerm) "还差一步" else "可以开始了", hint)
             }
-            if (startRefused) status(R.color.err, "手机暂时不让字幕启动", "请再点一次开始。如果还是不行，请反馈出现这个提示前做了什么。")
-            else status(R.color.brand, if (missingPerm) "还差一步" else "可以开始了", hint)
             primary.text = "开始字幕"; primary.setIconResource(R.drawable.ic_play)
             primary.backgroundTintList = ColorStateList.valueOf(getColor(R.color.brand))
             onPrimary(R.color.on_brand)
@@ -538,6 +635,37 @@ class MainActivity : Activity() {
     /** Text and icon colour of the main button: each fill has its own readable foreground (indigo / red, day / night). */
     private fun onPrimary(color: Int) {
         primary.setTextColor(getColor(color)); primary.iconTint = ColorStateList.valueOf(getColor(color))
+    }
+
+    /** The models ship inside the APK; a build made without setup.sh has none, and the chip must say so. */
+    private val engineReady by lazy {
+        runCatching {
+            assets.open("models/asr_sv/model.int8.onnx").close()
+            assets.open("models/vad/silero_vad.onnx").close()
+            true
+        }.getOrDefault(false)
+    }
+
+    /** The three chips under the button: what listens, what translates, how the captions appear. */
+    private fun renderChips() {
+        chip(findViewById(R.id.chipEngine), if (engineReady) R.color.ok else R.color.warn,
+            if (engineReady) "引擎 已就绪" else "引擎 未安装")
+        val ready = prefs.byokReady
+        // a long model id would push the third chip off a narrow phone; the page below shows it in full
+        chip(findViewById(R.id.chipTranslate), if (ready) R.color.ok else R.color.warn,
+            if (ready) "翻译 " + prefs.byokModel.take(14) else "翻译 未配置")
+        chip(findViewById(R.id.chipMode), R.color.muted, if (prefs.finalOnly) "说完再出" else "边听边出")
+    }
+
+    /** One chip: a dot in [dot] in front of a single line of text. */
+    private fun chip(v: TextView, dot: Int, text: String) {
+        v.text = text
+        val d = GradientDrawable().apply {
+            shape = GradientDrawable.OVAL
+            setSize((7 * dpx).toInt(), (7 * dpx).toInt())
+            setColor(getColor(dot))
+        }
+        v.setCompoundDrawablesRelativeWithIntrinsicBounds(d, null, null, null)
     }
 
 
@@ -613,6 +741,18 @@ class MainActivity : Activity() {
         setPadding(0, (top * dpx).toInt(), 0, (8 * dpx).toInt())
     }
 
+    /**
+     * Gives a bare EditText the look of a field: magpie's box, 10 dp corners, an indigo outline while it holds the
+     * cursor. Without this it is indistinguishable from the text around it until it is tapped — on a phone that is
+     * the difference between "here is a setting" and "here is something you can change".
+     */
+    private fun <T : android.widget.EditText> T.asField(): T = apply {
+        setBackgroundResource(R.drawable.field_bg)
+        setPadding((14 * dpx).toInt(), (12 * dpx).toInt(), (14 * dpx).toInt(), (12 * dpx).toInt())
+        minimumHeight = (52 * dpx).toInt()
+        gravity = Gravity.CENTER_VERTICAL
+    }
+
     /** Heading of a group inside a settings card. */
     private fun heading(t: String, top: Int = 26) = TextView(this).apply {
         text = t; textSize = 15f; setTextColor(getColor(R.color.text)); typeface = android.graphics.Typeface.DEFAULT_BOLD
@@ -623,6 +763,32 @@ class MainActivity : Activity() {
     private fun hint(t: String) = TextView(this).apply {
         text = t; textSize = 13f; setTextColor(getColor(R.color.text2)); setLineSpacing(2 * dpx, 1f)
         setPadding(0, (6 * dpx).toInt(), 0, 0)
+    }
+
+    /**
+     * A long explanation folded to two lines, with 展开 under it. The 翻译 page carries several paragraphs of
+     * why-and-what; unfolded they push the controls that actually get touched off the first screens.
+     */
+    private fun foldHint(t: String): LinearLayout = LinearLayout(this).apply {
+        orientation = LinearLayout.VERTICAL
+        val body = hint(t).apply { maxLines = 2; ellipsize = android.text.TextUtils.TruncateAt.END }
+        addView(body)
+        var open = false
+        addView(TextView(this@MainActivity).apply {
+            text = "展开说明"
+            textSize = 13f
+            setTextColor(getColor(R.color.brand))
+            setPadding(0, (6 * dpx).toInt(), 0, 0)
+            minimumHeight = (40 * dpx).toInt()
+            gravity = Gravity.CENTER_VERTICAL
+            isClickable = true
+            setOnClickListener {
+                open = !open
+                text = if (open) "收起" else "展开说明"
+                body.maxLines = if (open) Int.MAX_VALUE else 2
+                body.ellipsize = if (open) null else android.text.TextUtils.TruncateAt.END
+            }
+        })
     }
 
     /** A risk / cost / "takes effect later" note: magpie's amber note, never cut short. */
@@ -830,7 +996,7 @@ class MainActivity : Activity() {
         showSeg()
         box.addView(segPause); box.addView(pauseSlider)
         box.addView(segMax); box.addView(maxSlider)
-        box.addView(hint("停顿多久算一句话说完了、一句话最长多长。调小出字更快但句子更碎（太碎识别会变差）；调大句子更完整但更晚出现。下次开始字幕时生效。"))
+        box.addView(foldHint("停顿多久算一句话说完了、一句话最长多长。调小出字更快但句子更碎（太碎识别会变差）；调大句子更完整但更晚出现。下次开始字幕时生效。"))
 
         // -- how captions appear
         box = group(root, "字幕怎么出现")
@@ -838,7 +1004,7 @@ class MainActivity : Activity() {
         box.addView(modeGroup, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
             topMargin = (8 * dpx).toInt()
         })
-        box.addView(hint("「边听边出」：一边说一边显示，灰色的字还会修改，说完一句后变成正式字幕。「说完再出」：每句话说完才显示，画面更干净，但会晚一点。字幕上的工具栏也能随时切换。"))
+        box.addView(foldHint("「边听边出」：一边说一边显示，灰色的字还会修改，说完一句后变成正式字幕。「说完再出」：每句话说完才显示，画面更干净，但会晚一点。字幕上的工具栏也能随时切换。"))
         switchRow(box, "去掉重复的字", "一句话分段识别时，接口处偶尔会把同一段话识别两遍。打开后自动去掉多出来的那一遍；如果说话人真的重复说了，也可能被去掉。",
             prefs.dedupeJoin) { prefs.dedupeJoin = it }
 
@@ -853,21 +1019,21 @@ class MainActivity : Activity() {
             checkBox.visibility = if (prefs.jevCheck) View.VISIBLE else View.GONE
             if (!prefs.jevCheck) return
             checkBox.addView(label("校验模型"))
-            val modelInput = android.widget.EditText(this).apply {
+            val modelInput = android.widget.EditText(this).asField().apply {
                 hint = "例如 qwen-flash"
                 isSingleLine = true; textSize = 16f; setText(prefs.judgeModelSetting)
                 setTextColor(getColor(R.color.text)); importantForAutofill = View.IMPORTANT_FOR_AUTOFILL_NO
             }
             checkBox.addView(modelInput)
             checkBox.addView(label("校验地址（留空则用翻译那套）"))
-            val urlInput = android.widget.EditText(this).apply {
+            val urlInput = android.widget.EditText(this).asField().apply {
                 hint = "例如 https://dashscope.aliyuncs.com/compatible-mode/v1"
                 isSingleLine = true; textSize = 15f; setText(prefs.judgeUrlSetting)
                 setTextColor(getColor(R.color.text)); importantForAutofill = View.IMPORTANT_FOR_AUTOFILL_NO
             }
             checkBox.addView(urlInput)
             checkBox.addView(label(if (prefs.hasJudgeKey) "校验 API Key：已保存（留空则用翻译的 key）" else "校验 API Key（留空则用翻译的 key）"))
-            val keyInput = android.widget.EditText(this).apply {
+            val keyInput = android.widget.EditText(this).asField().apply {
                 hint = if (prefs.hasJudgeKey) "输入新的 key 来替换" else "在这里粘贴 key"
                 inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD
                 isSingleLine = true; textSize = 15f; setTextColor(getColor(R.color.text))
@@ -934,10 +1100,10 @@ class MainActivity : Activity() {
             }, LinearLayout.LayoutParams(
                 LinearLayout.LayoutParams.WRAP_CONTENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { marginStart = (8 * dpx).toInt() })
         }, LinearLayout.LayoutParams(LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply { topMargin = (6 * dpx).toInt() })
-        box.addView(hint("填一个 OpenAI 兼容接口的 LLM 服务来翻译字幕，只发送识别出的文字，不发送声音。\n模型要求：必须能关闭思考（深度思考 / reasoning），否则每句都要等很久；尽量选回复速度快的模型，字幕才跟得上。"))
+        box.addView(foldHint("填一个 OpenAI 兼容接口的 LLM 服务来翻译字幕，只发送识别出的文字，不发送声音。\n模型要求：必须能关闭思考（深度思考 / reasoning），否则每句都要等很久；尽量选回复速度快的模型，字幕才跟得上。"))
         fun field(title: String, value: String, hintText: String, password: Boolean = false): android.widget.EditText {
             box.addView(label(title))
-            return android.widget.EditText(this).apply {
+            return android.widget.EditText(this).asField().apply {
                 setText(value); hint = hintText; isSingleLine = true; textSize = 16f; setTextColor(getColor(R.color.text))
                 inputType = android.text.InputType.TYPE_CLASS_TEXT or
                     if (password) android.text.InputType.TYPE_TEXT_VARIATION_PASSWORD else android.text.InputType.TYPE_TEXT_VARIATION_URI
@@ -990,14 +1156,15 @@ class MainActivity : Activity() {
             textSize = 15f; isEnabled = !testing; isAllCaps = false
             setOnClickListener { editByokAdvanced(d) }
         })
-        val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.END }
+        val row = LinearLayout(this).apply { orientation = LinearLayout.HORIZONTAL; gravity = Gravity.CENTER_VERTICAL or Gravity.END }
         row.addView(MaterialButton(this, null, com.google.android.material.R.attr.borderlessButtonStyle).apply {
             // a draft change like the rest: saved (and a running session switched) only by 保存
             text = "清除 key"; textSize = 16f; isEnabled = saved != null && !testing
             setOnClickListener { d.clearKey = true; d.key = ""; renderTranslate() }
         })
-        row.addView(MaterialButton(this, null, com.google.android.material.R.attr.borderlessButtonStyle).apply {
-            text = "保存"; textSize = 16f; isEnabled = !testing
+        row.addView(MaterialButton(this).apply {
+            text = "保存"; textSize = 15f; isEnabled = !testing
+            minimumHeight = (48 * dpx).toInt()
             setOnClickListener {
                 if (save() != null) {
                     if (running) byokResult = "已保存，字幕从下一句开始用新的设置；第一次用这个模型时会先自动测试怎样关闭思考。"
@@ -1005,7 +1172,10 @@ class MainActivity : Activity() {
                 }
             }
         })
-        val test = MaterialButton(this).apply { text = if (testing) "测试中…" else "测试连接"; textSize = 16f; isEnabled = !running && !testing }
+        // 保存 is the commit; the test is the secondary one, so it is the outlined button here
+        val test = MaterialButton(this, null, R.style.Widget_JpSub_ActionButton).apply {
+            text = if (testing) "测试中…" else "测试连接"; textSize = 15f; isEnabled = !running && !testing
+        }
         row.addView(test)
         box.addView(row)
         box.addView(result)
@@ -1072,7 +1242,7 @@ class MainActivity : Activity() {
             orientation = LinearLayout.VERTICAL
             setPadding((22 * dpx).toInt(), (4 * dpx).toInt(), (22 * dpx).toInt(), 0)
         }
-        fun box(v: String, h: String) = android.widget.EditText(this).apply {
+        fun box(v: String, h: String) = android.widget.EditText(this).asField().apply {
             setText(v); hint = h; isSingleLine = true; textSize = 15f; setTextColor(getColor(R.color.text))
             inputType = android.text.InputType.TYPE_CLASS_TEXT or android.text.InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS
             importantForAutofill = View.IMPORTANT_FOR_AUTOFILL_NO
@@ -1348,10 +1518,6 @@ class MainActivity : Activity() {
             lKeepS.text = "屏幕上至少留  ${keepS.value.toInt()} 句"
             lKeepC.text = "字数超过  ${keepC.value.toInt()} 字后，收起最早的句子"
             keepHint.text = "屏幕上会留着刚说完的几句话，方便回看；句数和字数都超过上面的数字时，最早的一句才会收起。字幕框放不下时，只显示最新的内容。"
-            // the row that opens the size page says what is set there now
-            findViewById<TextView>(R.id.sizeSummary).text = "宽 ${width.value.toInt()}% · 高 " +
-                (if (prefs.heightFrac <= 0f) "自动" else "${Math.round(prefs.heightFrac * 100)}%") +
-                " · 至少留 ${keepS.value.toInt()} 句 · ${keepC.value.toInt()} 字"
             preview.setColors(CaptionOverlayView.palette(prefs.palette))
             preview.applyStyle(size.value, shownAlpha)
             // same caption height as the overlay will get (the stage grows with it)
@@ -1388,7 +1554,13 @@ class MainActivity : Activity() {
 
     private fun start() {
         startRefused = false
-        if (!prefs.byokReady) return // render() says what is missing
+        // first use: without an LLM API there is nothing to start with, so the one action opens the page that fills
+        // it in — the home card already says which part is missing
+        if (!prefs.byokReady) {
+            selectPage(2)
+            Toast.makeText(this, "先填好 LLM API，再回首页点开始字幕", Toast.LENGTH_SHORT).show()
+            return
+        }
         // a connectivity test still running would probe the same service again alongside the session's own probe
         byokTest?.let { it.cancel(); byokTest = null; renderTranslate() }
         if (!hasAudio()) {
@@ -1398,6 +1570,8 @@ class MainActivity : Activity() {
             return
         }
         if (!Settings.canDrawOverlays(this)) {
+            // the system page is a detour: coming back with the permission granted continues the start by itself
+            startPending = true
             startActivity(Intent(Settings.ACTION_MANAGE_OVERLAY_PERMISSION, Uri.parse("package:$packageName")))
             return
         }
@@ -1438,7 +1612,7 @@ class MainActivity : Activity() {
         /** where the project lives (set by the author; the repository may not be public yet) */
         // DIY: 指向自己的 fork——上游 release 的签名和本包不一致，应用内更新装不上
         const val REPO_URL = "https://github.com/J1nxi-youmi/simul-subtitle-diy"
-        /** Settings categories: the list shown for each, and its tab label. */
-        val TABS: List<Pair<Int, String>> = listOf(R.id.tabCaption to "字幕", R.id.tabTranslate to "翻译", R.id.tabPage to "页面", R.id.tabRecords to "记录")
+        /** 本次会话 lists at most this many lines; exporting keeps all of them */
+        const val SESSION_LINES = 8
     }
 }

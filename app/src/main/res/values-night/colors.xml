@@ -15,6 +15,8 @@
     <color name="seg_track">#FF29292D</color>
     <color name="seg_thumb">#FF444448</color>
     <color name="ctl_fg">#FFA1A1AA</color>
+    <color name="label">#FF9A9AA3</color>
+    <color name="field">#FF1E1E23</color>
     <color name="text">#FFEDEDF1</color>
     <color name="text2">#FFB9B9C1</color>
     <color name="muted">#FF8B8B94</color>

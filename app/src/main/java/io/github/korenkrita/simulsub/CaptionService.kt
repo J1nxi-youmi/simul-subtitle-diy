@@ -62,6 +62,7 @@ class CaptionService : Service(), SessionHost {
         }, main)
         projection = p
         running = true
+        resetHistory()
         showOverlay()
         session.start()
         return START_NOT_STICKY
@@ -164,6 +165,8 @@ class CaptionService : Service(), SessionHost {
 
     override fun show(lines: List<CaptionLine>, diag: String?, mtLight: ServiceStatus.Light, jevLight: ServiceStatus.Light,
                       mtReason: String?, jevReason: String?) {
+        // 本次会话 keeps every finished sentence, not only the ones the card still has room for
+        for (l in lines) if (l.isFinal) addFinal(l)
         val v = overlay ?: return
         v.setLines(lines.map { CaptionOverlayView.Line(it.zh, it.ja, it.isFinal, it.id) }, diag)
         relayoutCaptions()
@@ -390,6 +393,29 @@ class CaptionService : Service(), SessionHost {
         /** true from start until onDestroy (main thread); the home screen uses it to show 开始/停止. */
         @Volatile var running = false
             private set
+
+        /**
+         * 本次会话: every finished sentence of this run, oldest first, kept after it ends so the page can still show
+         * what was said (the PC keeps its last session the same way). Read and written on the main thread only.
+         */
+        @Volatile var history: List<CaptionLine> = emptyList()
+            private set
+        private val hist = ArrayList<CaptionLine>()
+        private val histIds = HashSet<Long>()
+
+        /** A new session starts with nothing said yet. */
+        fun resetHistory() {
+            hist.clear(); histIds.clear(); history = emptyList()
+        }
+
+        /** 清空 on the home page: forget this session's lines (a running session keeps appending from here). */
+        fun clearHistory() { resetHistory() }
+
+        private fun addFinal(l: CaptionLine) {
+            if (!histIds.add(l.id)) return // the same sentence is shown again on every update
+            hist.add(l)
+            history = ArrayList(hist)
+        }
 
         fun start(ctx: Context, code: Int, data: Intent) {
             ctx.startForegroundService(

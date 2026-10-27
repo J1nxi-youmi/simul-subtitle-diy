@@ -17,6 +17,10 @@
     <color name="seg_track">#FFE6E6EB</color>
     <color name="seg_thumb">#FFFFFFFF</color>
     <color name="ctl_fg">#FF63636B</color>
+    <!-- section labels above a card: muted is 3.3:1 on bg, too low for 12 sp text; this is 4.6:1 -->
+    <color name="label">#FF6E6E77</color>
+    <!-- text fields: one step off the card, so a box reads as editable before it is focused -->
+    <color name="field">#FFF7F7FA</color>
     <!-- ink: body text, switches and slider fills (magpie's fg) -->
     <color name="text">#FF1C1C21</color>
     <color name="text2">#FF4B4B53</color>
